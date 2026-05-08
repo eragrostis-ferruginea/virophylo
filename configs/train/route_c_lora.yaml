@@ -1,3 +1,4 @@
+data_dir: "data/processed"
 backbone: "dnabert2"
 lora_rank: 16
 lora_alpha: 32

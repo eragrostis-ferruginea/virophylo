@@ -5,20 +5,96 @@ import numpy as np
 from itertools import combinations
 
 
+def get_quartet_topology_from_tree(ref_tree_newick, quartet_labels):
+    try:
+        import dendropy
+        tns = dendropy.TaxonNamespace()
+        tree = dendropy.Tree.get(data=ref_tree_newick, schema="newick", taxon_namespace=tns)
+
+        taxa = [tns.get_taxon(l) for l in quartet_labels]
+        if any(t is None for t in taxa):
+            return 0
+
+        mrca = tree.mrca(taxa=taxa)
+        if mrca is None:
+            return 0
+
+        subtrees = {}
+        for label in quartet_labels:
+            node = tree.find_node_with_taxon_label(label)
+            if node is None:
+                return 0
+            current = node
+            while current.parent_node != mrca and current.parent_node is not None:
+                current = current.parent_node
+            partner = None
+            for other_label in quartet_labels:
+                if other_label == label:
+                    continue
+                other_node = tree.find_node_with_taxon_label(other_label)
+                other_current = other_node
+                while other_current.parent_node != mrca and other_current.parent_node is not None:
+                    other_current = other_current.parent_node
+                if other_current == current:
+                    partner = other_label
+                    break
+            if partner:
+                subtrees[label] = partner
+
+        pairs = set()
+        used = set()
+        for k, v in subtrees.items():
+            if k not in used and v not in used:
+                pair = tuple(sorted([k, v]))
+                pairs.add(pair)
+                used.add(k)
+                used.add(v)
+
+        remaining = [l for l in quartet_labels if l not in used]
+        if len(remaining) == 2:
+            pair = tuple(sorted(remaining))
+            pairs.add(pair)
+
+        if len(pairs) != 2:
+            return 0
+
+        pair_list = sorted(pairs)
+        a, b = quartet_labels[0], quartet_labels[1]
+        c, d = quartet_labels[2], quartet_labels[3]
+
+        pair_ab = tuple(sorted([a, b]))
+        pair_cd = tuple(sorted([c, d]))
+        pair_ac = tuple(sorted([a, c]))
+        pair_bd = tuple(sorted([b, d]))
+        pair_ad = tuple(sorted([a, d]))
+        pair_bc = tuple(sorted([b, c]))
+
+        if (pair_ab in pairs and pair_cd in pairs):
+            return 0
+        elif (pair_ac in pairs and pair_bd in pairs):
+            return 1
+        elif (pair_ad in pairs and pair_bc in pairs):
+            return 2
+        return 0
+    except Exception:
+        return 0
+
+
 class QuartetLoss(nn.Module):
     def __init__(self, temperature=1.0):
         super().__init__()
         self.temperature = temperature
 
-    def forward(self, dist_matrix, ref_tree_newick=None, quartet_indices=None, quartet_labels=None):
+    def forward(self, dist_matrix, ref_tree_newick=None, quartet_indices=None,
+                quartet_topologies=None):
         if quartet_indices is not None:
-            return self._compute_from_indices(dist_matrix, quartet_indices)
+            return self._compute_from_indices(dist_matrix, quartet_indices, quartet_topologies)
         raise ValueError("quartet_indices must be provided")
 
-    def _compute_from_indices(self, dist_matrix, quartet_indices):
+    def _compute_from_indices(self, dist_matrix, quartet_indices, quartet_topologies=None):
         batch_loss = torch.tensor(0.0, device=dist_matrix.device)
         count = 0
-        for q in quartet_indices:
+        for i, q in enumerate(quartet_indices):
             a, b, c, d = q
             d_ab = dist_matrix[a, b] + dist_matrix[c, d]
             d_ac = dist_matrix[a, c] + dist_matrix[b, d]
@@ -26,19 +102,33 @@ class QuartetLoss(nn.Module):
 
             scores = torch.stack([d_ab, d_ac, d_ad]) / self.temperature
             log_probs = F.log_softmax(-scores, dim=0)
-            batch_loss = batch_loss - log_probs[0]
+
+            if quartet_topologies is not None and i < len(quartet_topologies):
+                correct_topo = quartet_topologies[i]
+            else:
+                correct_topo = 0
+
+            batch_loss = batch_loss - log_probs[correct_topo]
             count += 1
 
         return batch_loss / max(count, 1)
 
-    def sample_quartets(self, n_seqs, n_quartets=100, ref_tree=None, rng=None):
+    def sample_quartets_with_topologies(self, n_seqs, ref_tree_newick, n_quartets=100, rng=None):
         if rng is None:
             rng = np.random.RandomState(42)
         indices = []
+        topologies = []
         for _ in range(n_quartets):
             q = tuple(sorted(rng.choice(n_seqs, 4, replace=False).tolist()))
             indices.append(q)
-        return indices
+
+            if ref_tree_newick is not None:
+                topo = get_quartet_topology_from_tree(ref_tree_newick, list(q))
+                topologies.append(topo)
+            else:
+                topologies.append(0)
+
+        return indices, topologies
 
 
 class DistanceRegressionLoss(nn.Module):
@@ -82,11 +172,12 @@ class TripleLoss(nn.Module):
         self.gamma = gamma
 
     def forward(self, dist_matrix, target_dist=None, log_likelihood=None,
-                quartet_indices=None, dist_mask=None):
+                quartet_indices=None, quartet_topologies=None, dist_mask=None):
         loss = torch.tensor(0.0, device=dist_matrix.device)
 
         if self.alpha > 0 and quartet_indices is not None:
-            l_q = self.quartet_loss(dist_matrix, quartet_indices=quartet_indices)
+            l_q = self.quartet_loss(dist_matrix, quartet_indices=quartet_indices,
+                                     quartet_topologies=quartet_topologies)
             loss = loss + self.alpha * l_q
 
         if self.gamma > 0 and target_dist is not None:

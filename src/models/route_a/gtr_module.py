@@ -33,11 +33,15 @@ class GTRModel(nn.Module):
         return Q
 
     def compute_P_matrix(self, Q, t):
-        eigenvalues, eigenvectors = torch.linalg.eigh(Q.T @ Q)
-        eigenvalues = -eigenvalues
-
-        exp_diag = torch.diag(torch.exp(eigenvalues * t))
-        P = eigenvectors @ exp_diag @ torch.linalg.inv(eigenvectors)
+        Qt = Q * t
+        try:
+            P = torch.linalg.matrix_exp(Qt)
+        except Exception:
+            eigenvalues, eigenvectors = torch.linalg.eig(Q)
+            eigenvalues_real = eigenvalues.real
+            eigenvectors_real = eigenvectors.real
+            exp_diag = torch.diag(torch.exp(eigenvalues_real * t))
+            P = eigenvectors_real @ exp_diag @ torch.linalg.inv(eigenvectors_real).real
 
         P = P.clamp(min=0)
         row_sums = P.sum(dim=-1, keepdim=True)
@@ -82,3 +86,11 @@ class GTRParameterHead(nn.Module):
         raw_freq = self.freq_head(embeddings)
         raw_alpha = self.alpha_head(embeddings).squeeze(-1)
         return raw_rates, raw_freq, raw_alpha
+
+    def normalize_rates_fn(self, raw_rates):
+        gtr = GTRModel()
+        return gtr.normalize_rates(raw_rates)
+
+    def normalize_frequencies_fn(self, raw_freq):
+        gtr = GTRModel()
+        return gtr.normalize_frequencies(raw_freq)

@@ -21,9 +21,9 @@ class RCEConv1d(nn.Module):
 
     def forward(self, x):
         out_fwd = self.conv(x)
-        x_rc = x.flip(dims=[1])
-        out_rc = self.conv_rc(x_rc).flip(dims=[1])
-        return out_fwd + out_rc + self.bias.unsqueeze(0)
+        x_rc = x.flip(dims=[-1])
+        out_rc = self.conv_rc(x_rc).flip(dims=[-1])
+        return out_fwd + out_rc + self.bias.unsqueeze(0).unsqueeze(-1)
 
 
 class ByteNetBlock(nn.Module):
@@ -31,8 +31,7 @@ class ByteNetBlock(nn.Module):
         super().__init__()
         self.conv1 = RCEConv1d(d_model, d_inner, kernel_size)
         self.conv2 = nn.Conv1d(d_inner, d_model, 1)
-        self.norm1 = nn.LayerNorm(d_model)
-        self.norm2 = nn.LayerNorm(d_model)
+        self.norm = nn.LayerNorm(d_model)
 
     def forward(self, x):
         residual = x
@@ -41,7 +40,7 @@ class ByteNetBlock(nn.Module):
         x = F.gelu(x)
         x = self.conv2(x)
         x = x.transpose(1, 2)
-        x = self.norm2(x + residual)
+        x = self.norm(x + residual)
         return x
 
 
@@ -114,8 +113,7 @@ class ViralPhyloGPN(nn.Module):
             seq_onehot = self.encode_onehot(seq_onehot)
 
         x = self.one_hot_embed(seq_onehot)
-        x = x.transpose(1, 2)
-        x = self.bytenet(x.transpose(1, 2)).transpose(1, 2)
+        x = self.bytenet(x)
         x = x.transpose(1, 2)
         x = self.output_conv(x)
         x = x.transpose(1, 2)

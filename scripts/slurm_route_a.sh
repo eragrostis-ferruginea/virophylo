@@ -28,12 +28,6 @@ export OMP_NUM_THREADS=4
 export TOKENIZERS_PARALLELISM=false
 
 echo "--- Training ViralPhyloGPN (4x RTX4080) ---"
-torchrun --nproc_per_node=4 \
-    src/training/route_a_train.py \
-    --config configs/train/route_a_pretrain.yaml \
-    --data_dir "$DATA_DIR" \
-    --output_dir "$OUTPUT_DIR" \
-    --bf16 \
-    --seed 42
+python src/training/route_a_train.py configs/train/route_a_pretrain.yaml
 
 echo "Route A training complete: $(date)"

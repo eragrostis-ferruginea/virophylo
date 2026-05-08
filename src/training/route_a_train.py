@@ -1,229 +1,294 @@
 import os
 import sys
-import argparse
-import yaml
+import json
 import torch
 import torch.nn as nn
 import torch.nn.functional as F
+import numpy as np
+from torch.utils.data import DataLoader
 from torch.optim import AdamW
 from torch.optim.lr_scheduler import CosineAnnealingLR
-import numpy as np
-from tqdm import tqdm
-from Bio import SeqIO
 
 from src.models.route_a.viral_phylogpn import ViralPhyloGPN
 from src.models.route_a.gtr_module import GTRModel
-from src.models.route_a.felsenstein import FelsensteinPruning
-from src.models.tree.nj_builder import nj_from_distance_matrix
-from src.models.tree.tree_metrics import TreeMetrics
-from src.models.distance.k2p_baseline import K2PDistance, compute_k2p_matrix
+from src.models.route_a.felsenstein import FelsensteinPruning, newick_to_tree_structure
+from src.models.distance.k2p_baseline import K2PDistance
+from src.models.distance.distance_head import DistanceHead
+from src.models.calibration.zca_whitening import EmbeddingCalibration
+from src.training.losses import QuartetLoss, DistanceRegressionLoss, PhyloLikelihoodLoss, TripleLoss, LossWeightScheduler
+from src.data.phylo_dataset import PhyloTrainingDataset
 
 
-def parse_args():
-    parser = argparse.ArgumentParser(description="ViroPhylo Route A Training")
-    parser.add_argument("--config", type=str, required=True)
-    parser.add_argument("--output_dir", type=str, default="outputs/route_a")
-    parser.add_argument("--data_dir", type=str, required=True)
-    parser.add_argument("--resume", type=str, default=None)
-    parser.add_argument("--bf16", action="store_true")
-    parser.add_argument("--seed", type=int, default=42)
-    return parser.parse_args()
+def compute_phylogpn_loss(model, onehot, alignment, tree_structure, Q_ref, freqs_ref,
+                          alpha_ref, felsenstein, dist_head, calibration,
+                          target_dist, quartet_indices, quartet_topologies,
+                          comp_features, loss_fn, device):
+    rates, freqs, alpha, site_emb = model(onehot)
 
+    rates_norm = model.normalize_rates(rates.mean(dim=1))
+    freqs_norm = model.normalize_frequencies(freqs.mean(dim=1))
+    alpha_norm = F.softplus(alpha.mean(dim=1)).clamp(min=0.1, max=10.0)
 
-class PhyloGPNTrainingDataset(torch.utils.data.Dataset):
-    def __init__(self, data_dir, split="train", window_size=241, max_gap_frac=0.5):
-        self.data_dir = data_dir
-        self.window_size = window_size
-        self.max_gap_frac = max_gap_frac
-        self.samples = []
-        self._load(split)
+    gtr = GTRModel()
+    Q = gtr.compute_Q_matrix(rates_norm[0], freqs_norm[0])
 
-    def _load(self, split):
-        aln_dir = os.path.join(self.data_dir, "alignments", split)
-        tree_dir = os.path.join(self.data_dir, "trees", split)
+    ll = felsenstein(alignment.unsqueeze(0), tree_structure, Q, freqs_norm[0], alpha_norm[0])
 
-        if not os.path.exists(aln_dir):
-            return
-
-        for f in sorted(os.listdir(aln_dir)):
-            if not f.endswith(('.fasta', '.fa', '.fna')):
-                continue
-            aln_path = os.path.join(aln_dir, f)
-            base = f.rsplit('.', 1)[0]
-            tree_path = os.path.join(tree_dir, base + '.nwk') if os.path.exists(tree_dir) else None
-
-            sequences, names = [], []
-            for record in SeqIO.parse(aln_path, "fasta"):
-                sequences.append(str(record.seq).upper())
-                names.append(record.id)
-
-            if len(sequences) < 4:
-                continue
-
-            ref_tree = None
-            if tree_path and os.path.exists(tree_path):
-                with open(tree_path) as tf:
-                    ref_tree = tf.read().strip()
-
-            self.samples.append({
-                "sequences": sequences,
-                "names": names,
-                "ref_tree": ref_tree,
-                "source": f,
-            })
-
-    def __len__(self):
-        return len(self.samples)
-
-    def __getitem__(self, idx):
-        sample = self.samples[idx]
-        seqs = sample["sequences"]
-        n = len(seqs)
-        L = len(seqs[0])
-
-        encoding = {'A': 0, 'C': 1, 'G': 2, 'T': 3, 'U': 3, '-': 4, 'N': 4}
-        encoded = torch.zeros(n, L, dtype=torch.long)
-        for i, seq in enumerate(seqs):
-            for j, c in enumerate(seq):
-                encoded[i, j] = encoding.get(c, 4)
-
-        gap_frac = (encoded == 4).float().mean(dim=0)
-        site_weights = torch.clamp(1.0 - gap_frac / self.max_gap_frac, min=0.05, max=1.0)
-
-        return {
-            "encoded_alignment": encoded,
-            "site_weights": site_weights,
-            "names": sample["names"],
-            "ref_tree": sample["ref_tree"],
-            "source": sample["source"],
-        }
-
-
-def compute_phylogpn_loss(model, encoded_alignment, site_weights, gtr_model, felsenstein,
-                          tree_structure=None):
-    n_seqs, L = encoded_alignment.shape
-    n_bases = 5
-    onehot = F.one_hot(encoded_alignment, num_classes=n_bases).float()
-
-    raw_rates, raw_freq, raw_alpha, site_embeddings = model(onehot)
-
-    rates = F.softplus(raw_rates)
-    rates = rates * 6.0 / rates.sum(dim=-1, keepdim=True).clamp(min=1e-10)
-    frequencies = F.softmax(raw_freq, dim=-1)
-    alpha = F.softplus(raw_alpha).clamp(min=0.1, max=10.0)
-
-    avg_rates = rates.mean(dim=(0, 1))
-    avg_freq = frequencies.mean(dim=(0, 1))
-    avg_alpha = alpha.mean()
-
-    Q = gtr_model.compute_Q_matrix(avg_rates, avg_freq)
-
-    if tree_structure is not None:
-        log_likelihood = felsenstein(
-            encoded_alignment, tree_structure, Q, avg_freq, avg_alpha
-        )
-        loss = -log_likelihood
+    if site_emb.dim() == 3:
+        pooled = site_emb.mean(dim=1)
     else:
-        loss = torch.tensor(0.0, device=encoded_alignment.device)
+        pooled = site_emb
 
-    entropy = -(frequencies * torch.log(frequencies + 1e-10)).sum(dim=-1)
-    site_weights_expanded = site_weights.unsqueeze(0).expand_as(entropy)
-    weighted_entropy = (entropy * site_weights_expanded).mean()
+    if comp_features is not None:
+        calibrated_emb, _ = calibration(pooled, comp_features.to(device))
+    else:
+        calibrated_emb = pooled
 
-    loss = loss + 0.01 * weighted_entropy
+    pred_dist = dist_head.pairwise_distances(calibrated_emb)
 
-    return loss
+    loss = loss_fn(
+        pred_dist,
+        target_dist=target_dist,
+        log_likelihood=ll,
+        quartet_indices=quartet_indices,
+        quartet_topologies=quartet_topologies,
+    )
+
+    entropy = -(freqs_norm * freqs_norm.log().clamp(min=-10)).sum(dim=-1).mean()
+    loss = loss + 0.01 * entropy
+
+    return loss, ll, pred_dist
 
 
-def main():
-    args = parse_args()
-    np.random.seed(args.seed)
-    torch.manual_seed(args.seed)
-
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
-
-    with open(args.config) as f:
-        config = yaml.safe_load(f)
-
-    os.makedirs(args.output_dir, exist_ok=True)
+def train_route_a(config):
+    device = torch.device(config.get("device", "cuda" if torch.cuda.is_available() else "cpu"))
 
     model = ViralPhyloGPN(
         window_size=config.get("window_size", 241),
-        d_model=config.get("d_model", 960),
-        d_inner=config.get("d_inner", 960),
-        n_blocks=config.get("n_blocks", 40),
-        kernel_size=config.get("kernel_size", 9),
+        d_model=config.get("d_model", 256),
+        d_inner=config.get("d_inner", 512),
+        n_blocks=config.get("n_blocks", 8),
+        kernel_size=config.get("kernel_size", 3),
+        n_bases=5,
     ).to(device)
 
-    gtr_model = GTRModel().to(device)
-    felsenstein = FelsensteinPruning(n_bases=4, n_gamma_categories=4).to(device)
+    dist_head = DistanceHead(
+        embed_dim=config.get("d_model", 256),
+        hidden_dim=config.get("d_model", 256),
+    ).to(device)
 
-    if args.resume:
-        state_dict = torch.load(args.resume, map_location=device)
-        model.load_state_dict(state_dict, strict=False)
+    calibration = EmbeddingCalibration(
+        embed_dim=config.get("d_model", 256),
+        n_composition_features=config.get("n_composition_features", 20),
+        use_zca=True,
+        use_debias=True,
+        use_site_weight=True,
+    ).to(device)
 
-    total_params = sum(p.numel() for p in model.parameters())
-    print(f"ViralPhyloGPN parameters: {total_params:,}")
+    felsenstein = FelsensteinPruning(n_bases=4, n_gamma_categories=4)
 
-    optimizer = AdamW(model.parameters(), lr=config.get("learning_rate", 5e-4),
-                      weight_decay=config.get("weight_decay", 0.01))
-    n_epochs = config.get("epochs", 30)
-    scheduler = CosineAnnealingLR(optimizer, T_max=n_epochs, eta_min=1e-6)
+    dataset = PhyloTrainingDataset(
+        data_dir=config["data_dir"],
+        split="train",
+        n_quartets_per_sample=config.get("n_quartets_per_sample", 100),
+        max_seqs=config.get("max_seqs", 64),
+        max_seq_length=config.get("max_seq_length", 2048),
+    )
 
-    train_dataset = PhyloGPNTrainingDataset(args.data_dir, split="train",
-                                             window_size=config.get("window_size", 241))
-    val_dataset = PhyloGPNTrainingDataset(args.data_dir, split="val",
-                                           window_size=config.get("window_size", 241))
+    val_dataset = PhyloTrainingDataset(
+        data_dir=config["data_dir"],
+        split="val",
+        n_quartets_per_sample=config.get("n_quartets_per_sample", 50),
+        max_seqs=config.get("max_seqs", 64),
+        max_seq_length=config.get("max_seq_length", 2048),
+    )
 
-    print(f"Train: {len(train_dataset)}, Val: {len(val_dataset)}")
+    dataloader = DataLoader(dataset, batch_size=1, shuffle=True, num_workers=config.get("num_workers", 4))
+    val_dataloader = DataLoader(val_dataset, batch_size=1, shuffle=False, num_workers=config.get("num_workers", 2))
 
-    best_loss = float('inf')
-    for epoch in range(n_epochs):
+    all_params = list(model.parameters()) + list(dist_head.parameters()) + list(calibration.parameters())
+    optimizer = AdamW(all_params, lr=config.get("lr", 1e-4), weight_decay=config.get("weight_decay", 0.01))
+    scheduler = CosineAnnealingLR(optimizer, T_max=config.get("epochs", 100))
+
+    loss_scheduler = LossWeightScheduler(
+        total_epochs=config.get("epochs", 100),
+        schedule_type=config.get("loss_schedule", "phased"),
+    )
+
+    k2p = K2PDistance()
+
+    best_val_loss = float('inf')
+    output_dir = config.get("output_dir", "outputs/route_a")
+    os.makedirs(output_dir, exist_ok=True)
+
+    for epoch in range(config.get("epochs", 100)):
+        alpha_w, beta_w, gamma_w = loss_scheduler.get_weights(epoch)
+
         model.train()
-        total_loss = 0.0
+        dist_head.train()
+        calibration.train()
+
+        epoch_loss = 0.0
         n_batches = 0
 
-        indices = np.random.permutation(len(train_dataset))
-        for idx in tqdm(indices, desc=f"Epoch {epoch}", leave=False):
-            sample = train_dataset[idx]
-            encoded = sample["encoded_alignment"].to(device)
-            site_w = sample["site_weights"].to(device)
+        for batch_idx, batch in enumerate(dataloader):
+            sequences = batch["sequences"]
+            names = batch["names"]
+            comp_features = batch["composition_features"]
+            encoded_seqs = batch["encoded_seqs"].to(device)
+            k2p_dist = batch["k2p_distance"].to(device)
+            target_dist = batch["target_distance"]
+            quartet_indices_raw = batch["quartet_indices"]
+            ref_tree = batch.get("ref_tree")
 
-            with torch.amp.autocast("cuda", enabled=args.bf16 and device.type == "cuda"):
-                loss = compute_phylogpn_loss(
-                    model, encoded, site_w, gtr_model, felsenstein,
-                )
+            n_seqs = len(sequences)
+            L = encoded_seqs.shape[1]
 
-            if torch.isnan(loss) or torch.isinf(loss):
-                continue
+            onehot = F.one_hot(encoded_seqs, num_classes=5).float()
+
+            tree_structure = None
+            if ref_tree is not None and isinstance(ref_tree, list) and ref_tree[0] is not None:
+                try:
+                    tree_structure = newick_to_tree_structure(ref_tree[0], names)
+                except Exception:
+                    tree_structure = None
+
+            quartet_indices = []
+            quartet_topologies = []
+            if isinstance(quartet_indices_raw, list) and len(quartet_indices_raw) > 0:
+                for q in quartet_indices_raw:
+                    if isinstance(q, (list, tuple)) and len(q) == 4:
+                        quartet_indices.append(tuple(q))
+
+            quartet_topologies_raw = batch.get("quartet_topologies", [])
+            if isinstance(quartet_topologies_raw, list) and len(quartet_topologies_raw) > 0:
+                for t in quartet_topologies_raw:
+                    quartet_topologies.append(int(t) if isinstance(t, (int, float)) else 0)
+            else:
+                quartet_topologies = [0] * len(quartet_indices)
+
+            if target_dist is not None and target_dist.numel() > 0:
+                target_dist = target_dist.to(device)
+            else:
+                target_dist = k2p_dist
+
+            loss_fn = TripleLoss(alpha=alpha_w, beta=beta_w, gamma=gamma_w)
 
             optimizer.zero_grad()
-            loss.backward()
-            torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
-            optimizer.step()
+            loss, ll, pred_dist = compute_phylogpn_loss(
+                model, onehot, encoded_seqs, tree_structure, None, None,
+                None, felsenstein, dist_head, calibration,
+                target_dist, quartet_indices, quartet_topologies,
+                comp_features, loss_fn, device,
+            )
 
-            total_loss += loss.item()
+            if torch.isfinite(loss):
+                loss.backward()
+                torch.nn.utils.clip_grad_norm_(all_params, max_norm=1.0)
+                optimizer.step()
+
+            epoch_loss += loss.item()
             n_batches += 1
 
+            if batch_idx % 50 == 0:
+                print(f"Epoch {epoch} Batch {batch_idx}: loss={loss.item():.4f} ll={ll.item():.4f}")
+
         scheduler.step()
-        avg_loss = total_loss / max(n_batches, 1)
+        avg_loss = epoch_loss / max(n_batches, 1)
         print(f"Epoch {epoch}: avg_loss={avg_loss:.4f}")
 
-        if avg_loss < best_loss:
-            best_loss = avg_loss
-            torch.save(model.state_dict(), os.path.join(args.output_dir, "best_model.pt"))
-            print(f"  -> Saved best model (loss={avg_loss:.4f})")
+        if (epoch + 1) % config.get("eval_every", 5) == 0:
+            model.eval()
+            dist_head.eval()
+            calibration.eval()
 
-        if (epoch + 1) % 5 == 0:
+            val_loss = 0.0
+            val_batches = 0
+
+            with torch.no_grad():
+                for batch in val_dataloader:
+                    sequences = batch["sequences"]
+                    names = batch["names"]
+                    comp_features = batch["composition_features"]
+                    encoded_seqs = batch["encoded_seqs"].to(device)
+                    k2p_dist = batch["k2p_distance"].to(device)
+                    target_dist = batch["target_distance"]
+                    quartet_indices_raw = batch["quartet_indices"]
+                    ref_tree = batch.get("ref_tree")
+
+                    onehot = F.one_hot(encoded_seqs, num_classes=5).float()
+
+                    tree_structure = None
+                    if ref_tree is not None and isinstance(ref_tree, list) and ref_tree[0] is not None:
+                        try:
+                            tree_structure = newick_to_tree_structure(ref_tree[0], names)
+                        except Exception:
+                            tree_structure = None
+
+                    quartet_indices = []
+                    quartet_topologies = []
+                    if isinstance(quartet_indices_raw, list) and len(quartet_indices_raw) > 0:
+                        for q in quartet_indices_raw:
+                            if isinstance(q, (list, tuple)) and len(q) == 4:
+                                quartet_indices.append(tuple(q))
+
+                    quartet_topologies_raw = batch.get("quartet_topologies", [])
+                    if isinstance(quartet_topologies_raw, list) and len(quartet_topologies_raw) > 0:
+                        for t in quartet_topologies_raw:
+                            quartet_topologies.append(int(t) if isinstance(t, (int, float)) else 0)
+                    else:
+                        quartet_topologies = [0] * len(quartet_indices)
+
+                    if target_dist is not None and target_dist.numel() > 0:
+                        target_dist = target_dist.to(device)
+                    else:
+                        target_dist = k2p_dist
+
+                    loss_fn = TripleLoss(alpha=alpha_w, beta=beta_w, gamma=gamma_w)
+                    loss, _, _ = compute_phylogpn_loss(
+                        model, onehot, encoded_seqs, tree_structure, None, None,
+                        None, felsenstein, dist_head, calibration,
+                        target_dist, quartet_indices, quartet_topologies,
+                        comp_features, loss_fn, device,
+                    )
+                    val_loss += loss.item()
+                    val_batches += 1
+
+            avg_val_loss = val_loss / max(val_batches, 1)
+            print(f"Validation loss: {avg_val_loss:.4f}")
+
+            if avg_val_loss < best_val_loss:
+                best_val_loss = avg_val_loss
+                torch.save({
+                    "model": model.state_dict(),
+                    "dist_head": dist_head.state_dict(),
+                    "calibration": calibration.state_dict(),
+                    "optimizer": optimizer.state_dict(),
+                    "epoch": epoch,
+                    "val_loss": avg_val_loss,
+                }, os.path.join(output_dir, "best_model.pt"))
+                print(f"Saved best model (val_loss={avg_val_loss:.4f})")
+
+        if (epoch + 1) % config.get("save_every", 10) == 0:
             torch.save({
+                "model": model.state_dict(),
+                "dist_head": dist_head.state_dict(),
+                "calibration": calibration.state_dict(),
+                "optimizer": optimizer.state_dict(),
                 "epoch": epoch,
-                "model_state_dict": model.state_dict(),
-                "optimizer_state_dict": optimizer.state_dict(),
-                "loss": avg_loss,
-            }, os.path.join(args.output_dir, f"checkpoint_epoch_{epoch}.pt"))
+            }, os.path.join(output_dir, f"checkpoint_epoch_{epoch}.pt"))
 
-    print(f"Training complete. Best loss: {best_loss:.4f}")
+    torch.save({
+        "model": model.state_dict(),
+        "dist_head": dist_head.state_dict(),
+        "calibration": calibration.state_dict(),
+    }, os.path.join(output_dir, "final_model.pt"))
+    print("Training complete.")
 
 
 if __name__ == "__main__":
-    main()
+    import yaml
+    config_path = sys.argv[1] if len(sys.argv) > 1 else "configs/train/route_a_pretrain.yaml"
+    with open(config_path) as f:
+        config = yaml.safe_load(f)
+    train_route_a(config)

@@ -57,8 +57,28 @@ class RouteCModel(nn.Module):
             d_llm = torch.cdist(cls_embeddings.unsqueeze(0), cls_embeddings.unsqueeze(0), p=2).squeeze(0)
 
         d_k2p = None
-        if self.use_hybrid_distance and encoded_seqs is not None:
-            d_k2p = self.k2p.compute_from_encoded(encoded_seqs.to(cls_embeddings.device))
+        if self.use_hybrid_distance:
+            if encoded_seqs is not None:
+                n = encoded_seqs.shape[0]
+                d_k2p = torch.zeros(n, n, device=cls_embeddings.device)
+                for i in range(n):
+                    for j in range(i + 1, n):
+                        valid = (encoded_seqs[i] <= 3) & (encoded_seqs[j] <= 3)
+                        n_valid = valid.sum().item()
+                        if n_valid == 0:
+                            d_k2p[i, j] = 0.0
+                            d_k2p[j, i] = 0.0
+                            continue
+                        same = (encoded_seqs[i] == encoded_seqs[j]) & valid
+                        diff = valid & ~same
+                        p = diff.sum().float() / n_valid
+                        if p >= 0.75:
+                            d_k2p[i, j] = 10.0
+                        else:
+                            d_k2p[i, j] = -0.75 * torch.log(1.0 - 4.0 * p / 3.0)
+                        d_k2p[j, i] = d_k2p[i, j]
+            else:
+                d_k2p = self.k2p.compute(sequences).to(cls_embeddings.device)
 
         if self.use_hybrid_distance and d_k2p is not None:
             dist_matrix = self.hybrid_distance(d_llm, d_k2p)

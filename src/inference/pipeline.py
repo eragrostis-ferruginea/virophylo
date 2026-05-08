@@ -114,11 +114,44 @@ class ViroPhyloPipeline:
         return newick, dist_matrix
 
     def _predict_route_a(self, sequences, names):
+        from src.models.route_a.gtr_module import GTRModel
         encoded = self.k2p.encode_sequences(sequences).to(self.device)
-        rates, freqs, alpha = self.model.predict_gtr_params(encoded.unsqueeze(0))
+        n = len(sequences)
+        L = encoded.shape[1]
+        onehot = torch.nn.functional.one_hot(encoded, num_classes=5).float()
+        raw_rates, raw_freq, raw_alpha, _ = self.model(onehot)
 
-        from src.models.distance.k2p_baseline import compute_k2p_matrix
-        dist_matrix = compute_k2p_matrix(sequences)
+        rates = torch.nn.functional.softplus(raw_rates)
+        rates = rates * 6.0 / rates.sum(dim=-1, keepdim=True).clamp(min=1e-10)
+        frequencies = torch.nn.functional.softmax(raw_freq, dim=-1)
+        alpha = torch.nn.functional.softplus(raw_alpha).clamp(min=0.1, max=10.0)
+
+        avg_rates = rates.mean(dim=(0, 1))
+        avg_freq = frequencies.mean(dim=(0, 1))
+
+        gtr = GTRModel()
+        Q = gtr.compute_Q_matrix(avg_rates, avg_freq)
+
+        dist_matrix = np.zeros((n, n))
+        for i in range(n):
+            for j in range(i + 1, n):
+                P = gtr.compute_P_matrix(Q, t=1.0)
+                seq_i = onehot[i]
+                seq_j = onehot[j]
+                valid = (encoded[i] <= 3) & (encoded[j] <= 3)
+                if valid.sum() == 0:
+                    d = 0.0
+                else:
+                    ll = 0.0
+                    for pos in range(L):
+                        if valid[pos]:
+                            obs_j = encoded[j, pos].item()
+                            if obs_j <= 3:
+                                ll += torch.log(P[encoded[i, pos].item(), obs_j] + 1e-30).item()
+                    d = -ll / max(valid.sum().item(), 1)
+                dist_matrix[i, j] = d
+                dist_matrix[j, i] = d
+
         newick = nj_from_distance_matrix(dist_matrix, names)
         return newick, dist_matrix
 

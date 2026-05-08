@@ -4,6 +4,121 @@ import torch.nn.functional as F
 import math
 
 
+def newick_to_tree_structure(newick_str, leaf_names=None):
+    tree_structure = {}
+    node_counter = [0]
+
+    def parse_newick(s):
+        s = s.strip().rstrip(';').strip()
+        node_id = node_counter[0]
+        node_counter[0] += 1
+
+        if not s.startswith('('):
+            parts = s.split(':')
+            name = parts[0].strip()
+            bl = float(parts[1]) if len(parts) > 1 else 0.01
+            tree_structure[node_id] = {
+                'children': [],
+                'seq_idx': -1,
+                'branch_length': bl,
+            }
+            return node_id, name, bl
+
+        depth = 0
+        split_positions = []
+        for i, c in enumerate(s):
+            if c == '(':
+                depth += 1
+            elif c == ')':
+                depth -= 1
+            elif c == ',' and depth == 1:
+                split_positions.append(i)
+
+        if not split_positions:
+            inner = s[1:-1] if s.startswith('(') else s
+            child_id, child_name, child_bl = parse_newick(inner)
+            tree_structure[node_id] = {
+                'children': [(child_id, child_bl)],
+                'seq_idx': -1,
+            }
+            return node_id, None, 0.01
+
+        parts = []
+        prev = 1
+        for pos in split_positions:
+            parts.append(s[prev:pos])
+            prev = pos + 1
+        close_paren = s.rfind(')')
+        parts.append(s[prev:close_paren])
+
+        after_close = s[close_paren + 1:]
+        parent_bl = 0.01
+        parent_name = None
+        if after_close:
+            if ':' in after_close:
+                ns, bs = after_close.rsplit(':', 1)
+                parent_name = ns.strip() if ns.strip() else None
+                try:
+                    parent_bl = float(bs.strip())
+                except ValueError:
+                    parent_bl = 0.01
+            else:
+                parent_name = after_close.strip()
+
+        children = []
+        for part in parts:
+            child_id, child_name, child_bl = parse_newick(part.strip())
+            children.append((child_id, child_bl))
+
+        tree_structure[node_id] = {
+            'children': children,
+            'seq_idx': -1,
+        }
+        return node_id, parent_name, parent_bl
+
+    root_id, _, _ = parse_newick(newick_str)
+
+    leaf_idx = 0
+    name_to_idx = {}
+    if leaf_names is not None:
+        for i, name in enumerate(leaf_names):
+            name_to_idx[name] = i
+
+    for nid in list(tree_structure.keys()):
+        info = tree_structure[nid]
+        if len(info['children']) == 0:
+            if leaf_names is not None:
+                info['seq_idx'] = leaf_idx
+                leaf_idx += 1
+            else:
+                info['seq_idx'] = leaf_idx
+                leaf_idx += 1
+
+    tree_structure['root'] = root_id
+    return tree_structure
+
+
+def topological_order(tree_structure):
+    root_id = tree_structure.get('root', 0)
+    order = []
+    visited = set()
+
+    def dfs(node_id):
+        if node_id in visited:
+            return
+        visited.add(node_id)
+        info = tree_structure.get(node_id)
+        if info is None or not isinstance(info, dict):
+            return
+        if 'children' in info:
+            for child_id, _ in info['children']:
+                dfs(child_id)
+        order.append(node_id)
+
+    dfs(root_id)
+    return order
+
+
 class FelsensteinPruning(nn.Module):
     def __init__(self, n_bases=4, n_gamma_categories=4):
         super().__init__()
@@ -31,9 +146,7 @@ class FelsensteinPruning(nn.Module):
     def compute_transition_prob(self, Q, t, rate_category=1.0):
         Qt = Q * t * rate_category
         try:
-            eigenvalues, eigenvectors = torch.linalg.eigh(Qt)
-            exp_diag = torch.diag(torch.exp(eigenvalues))
-            P = eigenvectors @ exp_diag @ torch.linalg.inv(eigenvectors)
+            P = torch.linalg.matrix_exp(Qt)
             P = P.clamp(min=1e-10)
             P = P / P.sum(dim=-1, keepdim=True)
             return P
@@ -46,13 +159,19 @@ class FelsensteinPruning(nn.Module):
 
         total_log_likelihood = torch.tensor(0.0, device=alignment_column.device)
 
+        traversal_order = topological_order(tree_structure)
+
         for g in range(n_gamma):
             rate = gamma_rates[g]
             partial_likelihoods = {}
 
-            for node_id, node_info in tree_structure.items():
-                if 'children' not in node_info or len(node_info['children']) == 0:
-                    obs = alignment_column[node_info['seq_idx']]
+            for node_id in traversal_order:
+                info = tree_structure.get(node_id)
+                if info is None or not isinstance(info, dict):
+                    continue
+
+                if 'children' not in info or len(info['children']) == 0:
+                    obs = alignment_column[info['seq_idx']]
                     if obs >= 0 and obs < self.n_bases:
                         L = torch.zeros(self.n_bases, device=alignment_column.device)
                         L[obs] = 1.0
@@ -61,9 +180,10 @@ class FelsensteinPruning(nn.Module):
                     partial_likelihoods[node_id] = L
                 else:
                     L_node = torch.ones(self.n_bases, device=alignment_column.device)
-                    for child_id, branch_length in node_info['children']:
+                    for child_id, branch_length in info['children']:
                         P = self.compute_transition_prob(Q, branch_length, rate)
-                        L_child = partial_likelihoods[child_id]
+                        L_child = partial_likelihoods.get(child_id,
+                            torch.ones(self.n_bases, device=alignment_column.device))
                         L_from_child = P @ L_child
                         L_node = L_node * L_from_child
                     partial_likelihoods[node_id] = L_node
@@ -121,7 +241,8 @@ class VectorizedFelsenstein(nn.Module):
                     bl = branch_lengths[node_idx - n_seqs][child_local_idx]
                     P = self._compute_P(Q, bl * rate)
                     child_L = partial[child_idx]
-                    partial[node_idx] = partial[node_idx] + torch.log(P @ child_L.T.clamp(min=1e-30).T + 1e-30)
+                    L_from_child = (child_L @ P.T).clamp(min=1e-30)
+                    partial[node_idx] = partial[node_idx] + torch.log(L_from_child + 1e-30)
 
                 partial[node_idx] = torch.exp(partial[node_idx])
 
@@ -134,9 +255,7 @@ class VectorizedFelsenstein(nn.Module):
     def _compute_P(self, Q, t):
         Qt = Q * t
         try:
-            eigenvalues, eigenvectors = torch.linalg.eigh(Qt)
-            exp_diag = torch.diag(torch.exp(eigenvalues))
-            P = eigenvectors @ exp_diag @ torch.linalg.inv(eigenvectors)
+            P = torch.linalg.matrix_exp(Qt)
             P = P.clamp(min=1e-10)
             P = P / P.sum(dim=-1, keepdim=True)
             return P
