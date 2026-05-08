@@ -115,8 +115,7 @@ class ViralPhyloGPN(nn.Module):
 
         x = self.one_hot_embed(seq_onehot)
         x = x.transpose(1, 2)
-        x = self.bytenet(x.transpose(1, 2)).transpose(1, 2)
-        x = x.transpose(1, 2)
+        x = self.bytenet(x)
         x = self.output_conv(x)
         x = x.transpose(1, 2)
         x = self.output_norm(self.output_act(x))
