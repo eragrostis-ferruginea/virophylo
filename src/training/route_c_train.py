@@ -104,12 +104,15 @@ def train_one_epoch(model, dataset, optimizer, loss_fn, scheduler, epoch, device
             target_dist = target_dist.to(device)
 
         quartet_indices = sample.get("quartet_indices", [])
+        quartet_topologies = sample.get("quartet_topologies", [])
         if not quartet_indices:
             rng = np.random.RandomState(epoch * 10000 + idx)
             quartet_indices = []
+            quartet_topologies = []
             for _ in range(n_quartets):
                 q = tuple(sorted(rng.choice(n_seqs, 4, replace=False).tolist()))
                 quartet_indices.append(q)
+                quartet_topologies.append(0)
 
         with torch.amp.autocast("cuda", enabled=bf16 and device.type == "cuda"):
             dist_matrix, embeddings = model(
@@ -131,6 +134,7 @@ def train_one_epoch(model, dataset, optimizer, loss_fn, scheduler, epoch, device
                 dist_matrix=dist_matrix,
                 target_dist=target_dist,
                 quartet_indices=quartet_indices,
+                quartet_topologies=quartet_topologies,
                 dist_mask=dist_mask,
             )
 

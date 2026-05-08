@@ -86,3 +86,11 @@ class GTRParameterHead(nn.Module):
         raw_freq = self.freq_head(embeddings)
         raw_alpha = self.alpha_head(embeddings).squeeze(-1)
         return raw_rates, raw_freq, raw_alpha
+
+    def normalize_rates_fn(self, raw_rates):
+        gtr = GTRModel()
+        return gtr.normalize_rates(raw_rates)
+
+    def normalize_frequencies_fn(self, raw_freq):
+        gtr = GTRModel()
+        return gtr.normalize_frequencies(raw_freq)
