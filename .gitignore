@@ -216,3 +216,26 @@ __marimo__/
 
 # Streamlit
 .streamlit/secrets.toml
+
+# LaTeX / PDF
+*.pdf
+*.aux
+*.log
+*.out
+*.toc
+*.lof
+*.lot
+*.bbl
+*.blg
+*.synctex.gz
+*.fls
+*.fdb_latexmk
+
+# ViroPhylo project-specific
+data/
+outputs/
+logs/
+*.pt
+*.ckpt
+wandb/
+Articles/

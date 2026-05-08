@@ -1,0 +1,11 @@
+backbone: "nt500m"
+lora_rank: 16
+lora_alpha: 32
+lora_dropout: 0.1
+n_composition_features: 20
+use_calibration: true
+use_hybrid_distance: true
+distance_head_type: "mlp"
+distance_hidden_dim: 256
+max_seqs_per_batch: 64
+n_quartets_per_sample: 100
