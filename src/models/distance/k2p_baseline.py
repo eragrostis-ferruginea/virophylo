@@ -57,7 +57,7 @@ def compute_k2p_distance_aligned(aligned_tensor):
     purines = torch.tensor([0, 0, 1, 1, 0], dtype=torch.bool)
     pyrimidines = torch.tensor([0, 1, 0, 0, 1], dtype=torch.bool)
 
-    valid_mask = (aligned_tensor >= 0) & (aligned_tensor <= 4)
+    valid_mask = (aligned_tensor >= 0) & (aligned_tensor <= 3)
     valid_i = valid_mask.unsqueeze(1).expand(n, n, L)
     valid_j = valid_mask.unsqueeze(0).expand(n, n, L)
     both_valid = valid_i & valid_j

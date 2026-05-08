@@ -33,11 +33,15 @@ class GTRModel(nn.Module):
         return Q
 
     def compute_P_matrix(self, Q, t):
-        eigenvalues, eigenvectors = torch.linalg.eigh(Q.T @ Q)
-        eigenvalues = -eigenvalues
-
-        exp_diag = torch.diag(torch.exp(eigenvalues * t))
-        P = eigenvectors @ exp_diag @ torch.linalg.inv(eigenvectors)
+        Qt = Q * t
+        try:
+            P = torch.linalg.matrix_exp(Qt)
+        except Exception:
+            eigenvalues, eigenvectors = torch.linalg.eig(Q)
+            eigenvalues_real = eigenvalues.real
+            eigenvectors_real = eigenvectors.real
+            exp_diag = torch.diag(torch.exp(eigenvalues_real * t))
+            P = eigenvectors_real @ exp_diag @ torch.linalg.inv(eigenvectors_real).real
 
         P = P.clamp(min=0)
         row_sums = P.sum(dim=-1, keepdim=True)

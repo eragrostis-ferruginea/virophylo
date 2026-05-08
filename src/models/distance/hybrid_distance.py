@@ -8,21 +8,22 @@ class HybridDistance(nn.Module):
         super().__init__()
         self.use_cross_branch_correction = use_cross_branch_correction
         if learnable_alpha:
-            self.log_alpha = nn.Parameter(torch.tensor(float(init_alpha)).log())
+            init_logit = torch.logit(torch.tensor(float(init_alpha)).clamp(0.01, 0.99))
+            self.alpha_param = nn.Parameter(init_logit)
         else:
-            self.register_buffer("log_alpha", torch.tensor(float(init_alpha)).log())
+            self.register_buffer("alpha_param", torch.logit(torch.tensor(float(init_alpha)).clamp(0.01, 0.99)))
 
         if use_cross_branch_correction:
-            self.log_cross_weight = nn.Parameter(torch.tensor(0.7).log())
+            self.cross_weight_param = nn.Parameter(torch.logit(torch.tensor(0.7)))
 
     @property
     def alpha(self):
-        return torch.sigmoid(self.log_alpha)
+        return torch.sigmoid(self.alpha_param)
 
     @property
     def cross_branch_weight(self):
         if self.use_cross_branch_correction:
-            return torch.sigmoid(self.log_cross_weight)
+            return torch.sigmoid(self.cross_weight_param)
         return 0.0
 
     def forward(self, d_llm, d_k2p, is_cross_branch_mask=None):

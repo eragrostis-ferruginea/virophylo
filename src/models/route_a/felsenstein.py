@@ -31,9 +31,7 @@ class FelsensteinPruning(nn.Module):
     def compute_transition_prob(self, Q, t, rate_category=1.0):
         Qt = Q * t * rate_category
         try:
-            eigenvalues, eigenvectors = torch.linalg.eigh(Qt)
-            exp_diag = torch.diag(torch.exp(eigenvalues))
-            P = eigenvectors @ exp_diag @ torch.linalg.inv(eigenvectors)
+            P = torch.linalg.matrix_exp(Qt)
             P = P.clamp(min=1e-10)
             P = P / P.sum(dim=-1, keepdim=True)
             return P
@@ -51,6 +49,8 @@ class FelsensteinPruning(nn.Module):
             partial_likelihoods = {}
 
             for node_id, node_info in tree_structure.items():
+                if not isinstance(node_info, dict):
+                    continue
                 if 'children' not in node_info or len(node_info['children']) == 0:
                     obs = alignment_column[node_info['seq_idx']]
                     if obs >= 0 and obs < self.n_bases:
@@ -121,7 +121,8 @@ class VectorizedFelsenstein(nn.Module):
                     bl = branch_lengths[node_idx - n_seqs][child_local_idx]
                     P = self._compute_P(Q, bl * rate)
                     child_L = partial[child_idx]
-                    partial[node_idx] = partial[node_idx] + torch.log(P @ child_L.T.clamp(min=1e-30).T + 1e-30)
+                    L_from_child = (child_L @ P.T).clamp(min=1e-30)
+                    partial[node_idx] = partial[node_idx] + torch.log(L_from_child + 1e-30)
 
                 partial[node_idx] = torch.exp(partial[node_idx])
 
@@ -134,9 +135,7 @@ class VectorizedFelsenstein(nn.Module):
     def _compute_P(self, Q, t):
         Qt = Q * t
         try:
-            eigenvalues, eigenvectors = torch.linalg.eigh(Qt)
-            exp_diag = torch.diag(torch.exp(eigenvalues))
-            P = eigenvectors @ exp_diag @ torch.linalg.inv(eigenvectors)
+            P = torch.linalg.matrix_exp(Qt)
             P = P.clamp(min=1e-10)
             P = P / P.sum(dim=-1, keepdim=True)
             return P
