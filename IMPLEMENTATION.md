@@ -216,15 +216,19 @@ class HybridDistance(nn.Module):
 
 | 数据集 | 来源 | 规模 | 用途 |
 |--------|------|------|------|
-| HIV-1 LANL | LANL Database | ~10,000 序列 | 微调 + 评估 |
-| SARS-CoV-2 Nextstrain | GISAID/Nextstrain | ~5,000 采样 | 微调 + 评估 |
-| Influenza GISAID | GISAID EpiFlu | ~5,000 采样 | 微调 + 评估 |
-| Dengue Virus | ViPR | ~3,000 序列 | 评估 |
-| HCV | LANL/ViPR | ~2,000 序列 | 评估 |
-| TreeBASE | treebase.org | ~1,500 比对+树 | 通用评估 |
-| 模拟数据 | DendroPy/INDELible | 10,000 棵树 | 训练+评估 |
+| HIV-1 pol | LANL HIV Database | ~500 采样 | 微调 + 评估 |
+| SARS-CoV-2 spike | Nextstrain (open) | ~500 采样 | 微调 + 评估 |
+| Influenza A HA | NCBI IVR / GISAID | ~500 采样 | 微调 + 评估 |
+| Dengue complete | ViPR | ~300 序列 | 微调 + 评估 |
+| HCV E1E2 | LANL / EuHCVdb | ~200 序列 | 评估 |
+| RSV complete | NCBI GenBank | ~200 序列 | 跨域评估 |
+| Rabies lyssavirus | NCBI GenBank | ~150 序列 | 跨域评估 |
+| Microsporidia 18S | NCBI | 28 序列 | LBA 评估 |
+| TreeBASE | treebase.org | 手动下载 | 通用评估 |
 
-**关键改进**：之前仅 440 条序列，现在至少 25,000 条，且每个病毒家族都有参考树。
+**全部使用真实数据，不使用任何模拟/生成数据。** 数据增强仅通过滑动窗口（500bp, stride 250bp）从真实比对中切分，不引入人工序列。
+
+**数据获取**：部分数据库（LANL, GISAID）需要注册/认证，无法自动下载时需手动放置到 `data/raw/` 目录。
 
 ### 3.7 LoRA 微调配置
 
@@ -393,14 +397,13 @@ L_total = α · L_quartet + β · L_phylo_likelihood
 |--------|------|--------|-----------|------|
 | HIV-1 pol | Retroviridae | 500 | LANL | 同域评估 |
 | SARS-CoV-2 spike | Coronaviridae | 500 | Nextstrain | 同域评估 |
-| Influenza A HA | Orthomyxoviridae | 500 | GISAID | 同域评估 |
+| Influenza A HA | Orthomyxoviridae | 500 | NCBI/GISAID | 同域评估 |
 | Dengue E | Flaviviridae | 200 | ViPR | 同域评估 |
 | HCV E2 | Flaviviridae | 200 | LANL | 同域评估 |
 | RSV | Pneumoviridae | 200 | GenBank | **跨域评估** |
 | Rabies lyssavirus | Rhabdoviridae | 150 | GenBank | **跨域评估** |
 | Microsporidia 18S | Eukaryote | 28 | NCBI | **LBA 评估**（Stage 3 基准） |
-| TreeBASE | Mixed | 1,533 | treebase.org | 通用评估 |
-| 模拟数据 | Simulated | 10,000 trees | DendroPy | 受控评估 |
+| TreeBASE | Mixed | 手动下载 | treebase.org | 通用评估 |
 
 ### 6.2 评估指标
 
@@ -522,9 +525,7 @@ virophylo/
 │   ├── data/
 │   │   ├── viral_dataset.py            # 病毒基因组数据集
 │   │   ├── phylo_dataset.py            # 系统发育训练数据
-│   │   ├── treebase_loader.py          # TreeBASE 数据加载
-│   │   ├── nextstrain_loader.py        # Nextstrain 数据加载
-│   │   └── simulation.py              # 模拟数据生成
+│   │   └── simulation.py              # 真实数据增强（滑动窗口/子采样）
 │   ├── training/
 │   │   ├── route_c_train.py            # Route C 训练入口
 │   │   ├── route_a_train.py            # Route A 训练入口
