@@ -1,9 +1,8 @@
 #!/bin/bash
 #SBATCH --job-name=virophylo_route_c
 #SBATCH --partition=gpu2
-#SBATCH --gres=gpu:4
-#SBATCH --cpus-per-task=32
-#SBATCH --mem=0
+#SBATCH --gres=gpu:1
+#SBATCH --cpus-per-task=8
 #SBATCH --time=7-00:00:00
 #SBATCH --output=logs/route_c_%j.log
 #SBATCH --error=logs/route_c_%j.err
@@ -27,18 +26,16 @@ mkdir -p "$OUTPUT_DIR" logs
 export OMP_NUM_THREADS=8
 export TOKENIZERS_PARALLELISM=false
 
-echo "--- Training DNABERT-2 + LoRA (4x A100) ---"
-torchrun --nproc_per_node=4 \
-    src/training/route_c_train.py \
+echo "--- Training DNABERT-2 + LoRA (1x A100) ---"
+python src/training/route_c_train.py \
     --config configs/train/route_c_lora.yaml \
     --data_dir "$DATA_DIR" \
     --output_dir "${OUTPUT_DIR}/dnabert2_lora" \
     --bf16 \
     --seed 42
 
-echo "--- Training NT-500M + LoRA (4x A100) ---"
-torchrun --nproc_per_node=4 \
-    src/training/route_c_train.py \
+echo "--- Training NT-500M + LoRA (1x A100) ---"
+python src/training/route_c_train.py \
     --config configs/train/route_c_lora.yaml \
     --data_dir "$DATA_DIR" \
     --output_dir "${OUTPUT_DIR}/nt500m_lora" \

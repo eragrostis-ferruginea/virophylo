@@ -101,6 +101,8 @@ def train_one_epoch(model, dataset, optimizer, loss_fn, scheduler, epoch, device
 
         target_dist = sample.get("target_distance")
         if target_dist is not None:
+            if isinstance(target_dist, np.ndarray):
+                target_dist = torch.from_numpy(target_dist).float()
             target_dist = target_dist.to(device)
 
         quartet_indices = sample.get("quartet_indices", [])
@@ -178,7 +180,8 @@ def evaluate(model, dataset, device, comp_extractor, k2p, metrics_obj):
                     composition_features=comp_tensor,
                     encoded_seqs=encoded_seqs,
                 )
-                m = metrics_obj.evaluate(pred_tree, ref_tree, dataset_name=f"sample_{idx}")
+                ref_newick = ref_tree.as_string(schema="newick")
+                m = metrics_obj.evaluate(pred_tree, ref_newick, dataset_name=f"sample_{idx}")
                 all_metrics.append(m)
             except Exception as e:
                 print(f"Eval error sample {idx}: {e}")
@@ -254,15 +257,19 @@ def main():
 
         val_metrics = evaluate(model, val_dataset, device, comp_extractor, k2p, metrics_obj)
 
-        nrf = val_metrics.get("nrf", float('inf'))
-        qa = val_metrics.get("qa", 0.0)
-        print(f"Epoch {epoch}: loss={train_loss:.4f}, val_nRF={nrf:.4f}, val_QA={qa:.4f}")
-
-        if nrf < best_nrf:
-            best_nrf = nrf
-            ckpt_path = os.path.join(args.output_dir, "best_model.pt")
-            torch.save(model.state_dict(), ckpt_path)
-            print(f"  -> Saved best model (nRF={nrf:.4f})")
+        nrf = val_metrics.get("nrf")
+        qa = val_metrics.get("qa")
+        
+        if nrf is not None:
+            print(f"Epoch {epoch}: loss={train_loss:.4f}, val_nRF={nrf:.4f}, val_QA={qa:.4f}")
+            
+            if nrf < best_nrf:
+                best_nrf = nrf
+                ckpt_path = os.path.join(args.output_dir, "best_model.pt")
+                torch.save(model.state_dict(), ckpt_path)
+                print(f"  -> Saved best model (nRF={nrf:.4f})")
+        else:
+            print(f"Epoch {epoch}: loss={train_loss:.4f}, val_nRF=N/A, val_QA=N/A")
 
         if (epoch + 1) % 5 == 0:
             ckpt_path = os.path.join(args.output_dir, f"checkpoint_epoch_{epoch}.pt")
@@ -273,7 +280,10 @@ def main():
                 "loss": train_loss,
             }, ckpt_path)
 
-    print(f"Training complete. Best nRF: {best_nrf:.4f}")
+    if best_nrf != float('inf'):
+        print(f"Training complete. Best nRF: {best_nrf:.4f}")
+    else:
+        print(f"Training complete. No validation metrics available.")
 
 
 if __name__ == "__main__":

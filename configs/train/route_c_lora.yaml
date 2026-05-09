@@ -3,7 +3,7 @@ backbone: "dnabert2"
 lora_rank: 16
 lora_alpha: 32
 lora_dropout: 0.1
-n_composition_features: 20
+n_composition_features: 256
 use_calibration: true
 use_hybrid_distance: true
 distance_head_type: "mlp"
