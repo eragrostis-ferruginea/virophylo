@@ -1,9 +1,0 @@
-d_model: 768
-n_mamba_layers: 12
-d_state: 16
-d_conv: 4
-expand: 2
-n_tree_heads: 8
-n_composition_features: 20
-use_calibration: true
-use_gtr_head: true

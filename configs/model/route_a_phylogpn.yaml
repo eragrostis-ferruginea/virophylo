@@ -1,6 +1,0 @@
-window_size: 241
-d_model: 960
-d_inner: 960
-n_blocks: 40
-kernel_size: 9
-n_bases: 5
