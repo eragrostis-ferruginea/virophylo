@@ -1,0 +1,31 @@
+trainer:
+  record: True
+  model_type: "Phyla-beta"
+  checkpoint_path: "weights/11564369"
+
+dataset:
+  dataset: 'treefam'
+
+model:
+  d_model: 256
+  n_layer: 16
+  vocab_size: 24
+  ssm_cfg: {}
+  rms_norm: True
+  residual_in_fp32: True
+  fused_add_norm: True
+  pad_vocab_size_multiple: 8
+  num_blocks: 3
+  model_name: 'Phyla-beta'
+  calculation_method: "attention"
+  inject_rotary_attention: False
+  positional_embeddings: False
+  bidirectional: True
+  bidirectional_strategy: "add"
+  bidirectional_weight_tie: True
+  ranking_loss: False
+
+eval:
+  random: False
+  device: "cuda:0"
+  extra_name: "phyla_beta"

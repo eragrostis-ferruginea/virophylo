@@ -1,0 +1,39 @@
+# 论文 PDF（非代码，仅文献参考）
+Ektefaie*.pdf
+
+# PHYLA 下载的预训练权重
+Phyla/weights/
+
+# PHYLA 评估数据集（约 2GB）
+Phyla/treefam.pickle
+Phyla/GTDB_taxonomic_clustering/
+Phyla/ProteinGym/
+Phyla/treebase_benchmark/
+
+# 运行时产物
+Phyla/slurm_logs/
+Phyla/eval_preds/
+Phyla/home/
+
+# PHYLA 原始仓库的非必要内容
+Phyla/data/
+Phyla/img/
+Phyla/tb_analysis/
+Phyla/.git/
+
+# Python 构建产物
+Phyla/*.egg-info/
+Phyla/*.egg-info
+
+# Python 缓存
+**/__pycache__/
+**/*.pyc
+**/*.pyo
+**/.pytest_cache/
+
+# 编辑器/系统文件
+*.swp
+*.swo
+*~
+.DS_Store
+Thumbs.db
