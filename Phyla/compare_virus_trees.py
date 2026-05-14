@@ -148,14 +148,26 @@ def hamming_distance(seq1, seq2):
     return 1.0 - matches / valid
 
 
-def build_nj_tree_from_hamming(sequences, seq_names):
+def seq_identity_distance(seq1, seq2):
+    """Pairwise sequence identity distance from MSA: 1 - (identities / aligned_length)."""
+    if len(seq1) != len(seq2):
+        return 1.0
+    identities = sum(1 for a, b in zip(seq1, seq2) if a == b and a not in ('-', '.', 'X'))
+    aligned = sum(1 for a, b in zip(seq1, seq2)
+                  if a not in ('-', '.', 'X') and b not in ('-', '.', 'X'))
+    if aligned == 0:
+        return 1.0
+    return 1.0 - identities / aligned
+
+
+def build_nj_tree_from_msa(sequences, seq_names, distance_func):
     from skbio import DistanceMatrix
     from skbio.tree import nj
     n = len(seq_names)
     dm_matrix = [[0.0] * n for _ in range(n)]
     for i in range(n):
         for j in range(i + 1, n):
-            d = hamming_distance(sequences[i], sequences[j])
+            d = distance_func(sequences[i], sequences[j])
             dm_matrix[i][j] = d
             dm_matrix[j][i] = d
     dm = DistanceMatrix(dm_matrix, seq_names)

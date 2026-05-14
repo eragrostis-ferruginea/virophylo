@@ -258,31 +258,60 @@ Originally, **78.2% of reference trees** had leaf sets that did not match PHYLA 
 | Item | Value |
 |------|-------|
 | Common families (ref + pred overlap) | 20,510 |
-| Perfect leaf match (no pruning needed) | ~4,462 (21.8%) |
-| Pruned to intersection | ~16,048 (78.2%) |
-| Too few leaves after pruning (<4) | minimal |
-| **Total evaluable families (v2)** | **~20,510** |
+| Perfect leaf match (no pruning needed) | 4,462 (21.8%) |
+| Pruned to intersection | 10,478 (51.1%) |
+| Too few leaves after pruning (<4) | 5,570 (27.2%) |
+| **Total evaluable families (v2)** | **14,940** |
+
+*5,570 families have <4 leaves after pruning because many VOGDB families are very small (2–3 sequences).*
 
 #### Multi-Baseline Comparison
 
-Results below are computed after pruning predicted trees to intersecting leaf sets, recovering all evaluable families. Paired statistical tests are reported alongside point estimates.
+Results computed after pruning predicted trees to intersecting leaf sets. Paired statistical tests are reported alongside point estimates.
 
 | Baseline | Families | Avg normRF | [95% CI] | Median | Perfect (0.0)% | Worst (>=0.98)% |
 |----------|----------|------------|----------|--------|---------------|-----------------|
-| **Random tree** | ~20,510 | **1.0000** | — | 1.0000 | 0.0% | 100.0% |
-| **PHYLA (CLS + NJ)** | ~20,510 | **—** | — | — | —% | —% |
-| **Hamming + NJ** | ~20,510 | **—** | — | — | —% | —% |
+| **Random tree** | 14,270 | **1.0000** | [1.0, 1.0] | 1.0000 | 0.0% | 100.0% |
+| **PHYLA (CLS + NJ)** | 14,940 | **0.4716** | [0.466, 0.477] | 0.5000 | 26.3% | 13.9% |
+| **Hamming + NJ** | 14,940 | **0.2638** | [0.259, 0.269] | 0.2000 | 41.3% | 8.5% |
 | **ESM2-650M + NJ** | *running* | *—* | — | — | — | — |
 
-*Note: Exact numbers will be populated after re-running with the v2 pruning fix.*
+**Paired Comparison (PHYLA vs Hamming):**
+- Wilcoxon signed-rank test: **p ≈ 0** (highly significant)
+- Cohen's d: **0.637** (medium effect size)
+- Mean difference: **+0.208** (PHYLA worse)
 
-#### Key Findings (Preliminary — Awaiting Re-run)
+#### Stratified Analysis by Family Size
+
+| Strata | PHYLA avg | PHYLA Perfect% | Hamming avg | Hamming Perfect% |
+|--------|-----------|----------------|-------------|-----------------|
+| Small (4–10 seqs, n=10,497) | **0.400** | 37.4% | **0.238** | 57.2% |
+| Medium (11–50 seqs, n=3,707) | **0.622** | 0.1% | **0.315** | 4.4% |
+| Large (51+ seqs, n=736) | **0.736** | 0.0% | **0.375** | 0.0% |
+
+#### Distribution of normRF
+
+| Range | PHYLA | Hamming + NJ | Random |
+|-------|-------|---------------|--------|
+| [0.0, 0.2) | 4,079 (27.3%) | **7,363 (49.3%)** | 0 (0%) |
+| [0.2, 0.4) | 1,776 (11.9%) | 3,440 (23.0%) | 0 (0%) |
+| [0.4, 0.6) | 2,870 (19.2%) | 2,139 (14.3%) | 0 (0%) |
+| [0.6, 0.8) | 3,269 (21.9%) | 641 (4.3%) | 0 (0%) |
+| [0.8, 1.0] | 871 (5.8%) | 82 (0.5%) | 14,270 (100%) |
+
+#### Key Findings
 
 1. **Random tree baseline (normRF=1.0) validates the metric**: Random topologies produce normRF=1.0 exactly, confirming the metric is not pathologically biased.
 
-2. **The v1 result (4,462 families) was biased toward easier families**: Families with perfect leaf set matching are those where MSA didn't filter out sequences — i.e., more conserved families. The v2 results on ~20,510 families will reveal whether PHYLA's performance degrades or improves on harder families.
+2. **PHYLA vs v1 comparison confirms selection bias**: PHYLA's avg normRF degraded from **0.444 (v1, easy families only)** to **0.472 (v2, all families)**, confirming that the v1 result was biased toward conserved families. However, the degradation is modest (+0.028).
 
-3. **Important caveat**: Hamming + NJ uses the **MSA (aligned sequences)** while PHYLA uses **FAA (unaligned sequences)**. This gives Hamming a significant advantage since alignment removes ambiguity. A fairer comparison would require either:
+3. **Hamming + NJ dramatically outperforms PHYLA**: Hamming achieves avg normRF=0.264 vs PHYLA's 0.472 (Cohen's d=0.64, p≈0). The difference is consistent across all family sizes.
+
+4. **PHYLA degrades sharply with family size**: Performance drops from normRF=0.40 (4–10 seqs) → 0.62 (11–50) → 0.74 (51+). Hamming is more robust: 0.24 → 0.32 → 0.38.
+
+5. **PHYLA shows a bimodal distribution**: 27.3% near-perfect matches (normRF<0.2) but 21.9% poor matches (0.6–0.8). This suggests PHYLA either reconstructs the topology well or fails significantly, with little middle ground.
+
+6. **Important caveat**: Hamming + NJ uses the **MSA (aligned sequences)** while PHYLA uses **FAA (unaligned sequences)**. This gives Hamming a significant advantage since alignment removes ambiguity. A fairer comparison would require either:
    - Feeding MSAs to PHYLA (it natively tokenizes raw sequences)
    - Computing Hamming from unaligned sequences (using pairwise alignment, which is expensive)
 

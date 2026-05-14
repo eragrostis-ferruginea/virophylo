@@ -22,6 +22,7 @@ echo "============================================"
 
 source /home/jianpinhe3/miniforge3/etc/profile.d/conda.sh
 conda activate virophylo
+export PYTHONUNBUFFERED=1
 
 python run_esm2_eval.py \
     --ref-pickle virus_data/vogdb_treefam_v2.pickle \
