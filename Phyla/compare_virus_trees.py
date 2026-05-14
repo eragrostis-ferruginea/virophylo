@@ -181,6 +181,23 @@ def build_random_tree(seq_names):
     return "(" + ",".join(shuffled) + ");"
 
 
+def load_msa_sequences(msa_path):
+    """Parse MSA file (FASTA format). Returns dict {name: sequence}."""
+    seqs = {}
+    name = None
+    with open(msa_path) as f:
+        for line in f:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                name = line[1:].split()[0]
+                seqs[name] = ""
+            elif name:
+                seqs[name] += line
+    return seqs
+
+
 def evaluate_baseline(family_list, ref_data, pred_data, msa_dir, baseline_type, faa_dir):
     norm_rfs = []
     csv_rows = []
@@ -192,31 +209,21 @@ def evaluate_baseline(family_list, ref_data, pred_data, msa_dir, baseline_type, 
         # family_list entries vary by context (see main() for format)
         if baseline_type == "phyla":
             vid, ref_tree_str, pred_tree_str, n_seqs = entry
-        elif baseline_type == "hamming":
+        elif baseline_type in ("hamming", "seqidentity"):
             vid, ref_tree_str, n_seqs = entry
             msa_path = os.path.join(msa_dir, f"{vid}.msa")
             if not os.path.exists(msa_path):
                 skipped += 1
                 continue
-            seqs = {}
-            name = None
-            with open(msa_path) as f:
-                for line in f:
-                    line = line.strip()
-                    if not line:
-                        continue
-                    if line.startswith(">"):
-                        name = line[1:].split()[0]
-                        seqs[name] = ""
-                    elif name:
-                        seqs[name] += line
+            seqs = load_msa_sequences(msa_path)
             seq_names = sorted(seqs.keys())
             if len(seq_names) < 4:
                 skipped += 1
                 continue
             seq_list = [seqs[n] for n in seq_names]
+            dist_func = hamming_distance if baseline_type == "hamming" else seq_identity_distance
             try:
-                pred_tree_str = build_nj_tree_from_hamming(seq_list, seq_names)
+                pred_tree_str = build_nj_tree_from_msa(seq_list, seq_names, dist_func)
             except:
                 skipped += 1
                 continue
@@ -302,7 +309,7 @@ def main():
     parser.add_argument("--msa-dir", default="virus_data/msa")
     parser.add_argument("--faa-dir", default="virus_data/faa")
     parser.add_argument("--output-dir", default="eval_preds")
-    parser.add_argument("--baselines", nargs="+", default=["phyla", "hamming", "random"])
+    parser.add_argument("--baselines", nargs="+", default=["phyla", "hamming", "seqidentity", "random"])
     args = parser.parse_args()
 
     ref_path = os.path.join(SCRIPT_DIR, args.ref_pickle)
@@ -416,6 +423,19 @@ def main():
             writer.writerows(csv_rows)
         print(f"  Saved: {out_csv} ({len(csv_rows)} rows)")
 
+    if "seqidentity" in args.baselines:
+        print(f"\n--- Evaluating SeqIdentity + NJ on {len(hamming_families)} families ---")
+        nrf, csv_rows, skipped, meta = evaluate_baseline(
+            hamming_families, ref_data, pred_data, msa_dir, "seqidentity", args.faa_dir)
+        all_results["seqidentity"] = {"norm_rfs": nrf, "csv_rows": csv_rows, "skipped": skipped}
+        all_metadata["seqidentity"] = meta
+        out_csv = os.path.join(output_dir, "virus_seqidentity_vs_fasttree.csv")
+        with open(out_csv, "w", newline="") as f:
+            writer = csv.writer(f)
+            writer.writerows([["dataset", "model", "rf", "max_rf", "norm_rf"]])
+            writer.writerows(csv_rows)
+        print(f"  Saved: {out_csv} ({len(csv_rows)} rows)")
+
     if "random" in args.baselines:
         print(f"\n--- Evaluating Random on {len(random_families)} families ---")
         nrf, csv_rows, skipped, meta = evaluate_baseline(
@@ -444,38 +464,30 @@ def main():
                 print_stratified(all_metadata[bl], bl)
 
     # ----------------------------------------------------------------
-    # Paired comparisons between PHYLA and Hamming
+    # Paired comparisons between all baselines (where available)
     # ----------------------------------------------------------------
-    if "phyla" in all_results and "hamming" in all_results:
-        print(f"\n{'='*70}")
-        print(f"   Paired Comparison: PHYLA vs Hamming")
-        print(f"{'='*70}")
-        # Align on common families
-        phyla_meta = all_metadata["phyla"]
-        hamming_meta = all_metadata["hamming"]
-        phyla_by_vid = {m[0]: m for m in phyla_meta}
-        hamming_by_vid = {m[0]: m for m in hamming_meta}
-        common_vids = sorted(set(phyla_by_vid.keys()) & set(hamming_by_vid.keys()))
-        phyla_nrs = [phyla_by_vid[v][2] for v in common_vids]
-        hamming_nrs = [hamming_by_vid[v][2] for v in common_vids]
-        n_paired = len(common_vids)
-
-        # Mean difference
-        mean_diff = (sum(phyla_nrs) - sum(hamming_nrs)) / n_paired
-        print(f"  Paired families: {n_paired}")
-        print(f"  PHYLA mean:      {sum(phyla_nrs)/n_paired:.6f}")
-        print(f"  Hamming mean:    {sum(hamming_nrs)/n_paired:.6f}")
-        print(f"  Mean difference: {mean_diff:.6f} (PHYLA - Hamming)")
-
-        # Paired Wilcoxon
-        W, p = paired_wilcoxon(phyla_nrs, hamming_nrs)
-        print(f"  Wilcoxon W:      {W:.2f}")
-        print(f"  p-value:         {p:.6e}")
-        print(f"  Significant?     {'YES (p<0.05)' if p < 0.05 else 'NO (p>=0.05)'}")
-
-        # Cohen's d
-        d = cohens_d(phyla_nrs, hamming_nrs)
-        print(f"  Cohen's d:       {d:.4f} ({'large' if abs(d) > 0.8 else 'medium' if abs(d) > 0.5 else 'small' if abs(d) > 0.2 else 'negligible'})")
+    baseline_names = [bl for bl in args.baselines if bl in all_results and bl != "random"]
+    if len(baseline_names) >= 2:
+        for i in range(len(baseline_names)):
+            for j in range(i + 1, len(baseline_names)):
+                bl_a, bl_b = baseline_names[i], baseline_names[j]
+                meta_a = all_metadata.get(bl_a, [])
+                meta_b = all_metadata.get(bl_b, [])
+                a_by_vid = {m[0]: m for m in meta_a}
+                b_by_vid = {m[0]: m for m in meta_b}
+                common_vids = sorted(set(a_by_vid.keys()) & set(b_by_vid.keys()))
+                if len(common_vids) == 0:
+                    continue
+                a_nrs = [a_by_vid[v][2] for v in common_vids]
+                b_nrs = [b_by_vid[v][2] for v in common_vids]
+                n_paired = len(common_vids)
+                mean_diff = (sum(a_nrs) - sum(b_nrs)) / n_paired
+                W, p = paired_wilcoxon(a_nrs, b_nrs)
+                d = cohens_d(a_nrs, b_nrs)
+                d_label = 'large' if abs(d) > 0.8 else 'medium' if abs(d) > 0.5 else 'small' if abs(d) > 0.2 else 'negligible'
+                sig = 'YES (p<0.05)' if p < 0.05 else 'NO (p>=0.05)'
+                print(f"\n  {bl_a} vs {bl_b}:")
+                print(f"    Mean diff: {mean_diff:+.6f}  |  Cohen's d: {d:.4f} ({d_label})  |  Wilcoxon p={p:.4e}  |  {sig}")
 
     # ----------------------------------------------------------------
     # Summary table

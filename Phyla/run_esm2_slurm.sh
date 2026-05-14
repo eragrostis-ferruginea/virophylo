@@ -6,7 +6,7 @@
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=8
-#SBATCH --partition=gpu1
+#SBATCH --partition=gpu2
 #SBATCH --gres=gpu:1
 
 SCRIPT_DIR="/home/jianpinhe3/virophylo/Phyla"

@@ -28,7 +28,7 @@ python compare_virus_trees.py \
     --msa-dir virus_data/msa \
     --faa-dir virus_data/faa \
     --output-dir eval_preds \
-    --baselines phyla hamming random
+    --baselines phyla hamming seqidentity random
 
 RC=$?
 echo "============================================"
