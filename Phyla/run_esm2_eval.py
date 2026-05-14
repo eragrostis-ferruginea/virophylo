@@ -40,19 +40,40 @@ def encode_sequences(model, tokenizer, sequences, max_len=1024):
     return embeddings.cpu()
 
 
+def remove_branch_distances(s):
+    t = Phylo.read(StringIO(s), "newick")
+    for n in t.get_nonterminals():
+        n.branch_length = None
+    for n in t.get_terminals():
+        n.branch_length = None
+    o = StringIO()
+    Phylo.write(t, o, "newick")
+    s2 = o.getvalue()
+    s2 = re.sub(r':[^,();\n]*', '', s2)
+    s2 = s2.replace("'", "")
+    return s2
+
+
+def prune_tree_to_leaves(tree_str, leaves_to_keep):
+    """Prune a tree (Newick string) to keep only specified leaves.
+    Returns the pruned Newick string, or None if < 4 leaves remain."""
+    clean = remove_branch_distances(tree_str)
+    t = Tree(clean)
+    tree_leaves = set(t.get_leaf_names())
+    keep = sorted([l for l in leaves_to_keep if l in tree_leaves])
+    if len(keep) < 4:
+        return None
+    t.prune(keep)
+    return t.write(format=5).replace(" ", "").replace("'", "")
+
+
+def get_leaf_names_from_newick(tree_str):
+    """Extract leaf names from a Newick string."""
+    t = Phylo.read(StringIO(tree_str), "newick")
+    return sorted(str(x.name) for x in t.get_terminals())
+
+
 def compute_normrf(pred_tree_str, ref_tree_str):
-    def remove_branch_distances(s):
-        t = Phylo.read(StringIO(s), "newick")
-        for n in t.get_nonterminals():
-            n.branch_length = None
-        for n in t.get_terminals():
-            n.branch_length = None
-        o = StringIO()
-        Phylo.write(t, o, "newick")
-        s2 = o.getvalue()
-        s2 = re.sub(r':[^,();\n]*', '', s2)
-        s2 = s2.replace("'", "")
-        return s2
     try:
         t1 = Tree(remove_branch_distances(pred_tree_str))
         t2 = Tree(remove_branch_distances(ref_tree_str))
@@ -134,6 +155,28 @@ def main():
 
         seq_list = [seqs[n] for n in seq_names]
         ref_tree_str = ref_entry["tree_newick"]
+
+        # Compute intersection of leaf sets to avoid ete3 NA mismatch.
+        # Reference trees (from MSA) may have fewer leaves than FAA.
+        ref_leaves = get_leaf_names_from_newick(ref_tree_str)
+        common_leaves = sorted(set(seq_names) & set(ref_leaves))
+        if len(common_leaves) < 4:
+            skipped += 1
+            results[vid] = None
+            continue
+
+        # Restrict seqs to common leaves
+        seq_names = common_leaves
+        seq_list = [seqs[n] for n in seq_names]
+
+        # Prune reference tree if needed
+        if set(ref_leaves) != set(common_leaves):
+            pruned_ref = prune_tree_to_leaves(ref_tree_str, common_leaves)
+            if pruned_ref is None:
+                skipped += 1
+                results[vid] = None
+                continue
+            ref_tree_str = pruned_ref
 
         try:
             batch_embeds = []

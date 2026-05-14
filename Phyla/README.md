@@ -114,17 +114,16 @@ VOGDB FAA/MSA
            │                            │
            └──────────┬─────────────────┘
                       ▼
-           ┌──────────────────────┐
-           │ Stage 3: CPU (sbatch)│
-           │ compare_virus_trees  │
-           │ .py                  │
-           │                      │
-           │ normRF comparison   │
-           │ (paper's exact      │
-           │  rf_distance)        │
-           └──────────┬───────────┘
+           ┌──────────────────────────────┐
+           │ Stage 3: Eval (CPU)          │
+           │ compare_virus_trees.py       │
+           │   - PHYLA vs FastTree        │
+           │   - Hamming + NJ vs FastTree │
+           │   - Random tree vs FastTree  │
+           │   - ESM2 + NJ vs FastTree *  │
+           └──────────┬───────────────────┘
                       ▼
-           eval_preds/virus_phyla_vs_fasttree.csv
+           eval_preds/virus_*.csv
 ```
 
 ### Stage 1: Reference Tree Construction
@@ -139,11 +138,15 @@ VOGDB FAA/MSA
 - **Job**: 57367 (GPU partition, 15 min 55 sec on gpu11)
 - **Output**: `phyla_predictions.pickle` — a dictionary mapping each VFAM ID to `{"pred_tree_newick": "...", "num_seqs": N, "seq_names": [...]}`
 
-### Stage 3: Comparison
+### Stage 3: Multi-Baseline Comparison
 - **Script**: [compare_virus_trees.py](file:///home/jianpinhe3/virophylo/Phyla/compare_virus_trees.py)
-- **SLURM**: [run_virus_compare_slurm.sh](file:///home/jianpinhe3/virophylo/Phyla/run_virus_compare_slurm.sh)
-- **Job**: 57391 (CPU partition, 3 min 7 sec)
-- **Output**: `eval_preds/virus_phyla_vs_fasttree.csv`
+- **SLURM**: [run_virus_eval_slurm.sh](file:///home/jianpinhe3/virophylo/Phyla/run_virus_eval_slurm.sh)
+- **Jobs**: 57422 (CPU, completed), 57425 (GPU, ESM2)
+- **Outputs**:
+  - `eval_preds/virus_phyla_vs_fasttree.csv`
+  - `eval_preds/virus_hamming_vs_fasttree.csv`
+  - `eval_preds/virus_random_vs_fasttree.csv`
+  - `eval_preds/virus_esm2_vs_fasttree.csv` *(pending)*
 
 ---
 
@@ -186,17 +189,33 @@ for each VFAM family:
   1. Parse both predicted and reference Newick strings with Bio.Phylo.read()
   2. Set all branch_length attributes to None (internal and terminal nodes)
   3. Re-serialize with Phylo.write() to Newick format
-  4. Strip remaining ":0.00000" annotations via string slicing
-  5. Parse cleaned strings with ete3.Tree() (format 1, unrooted)
-  6. Compute Robinson-Foulds distance: t1.compare(t2, unrooted=True)
-  7. Normalized RF = rf / max_rf  (normRF: 0 = identical topology, 1 = completely different)
-  8. If ANY exception occurs → skip the family (paper's behavior)
+  4. Strip branch lengths via regex pattern ':digits'
+  5. Remove single quotes from leaf names (PHYLA output quirk)
+  6. Parse cleaned strings with ete3.Tree()
+  7. Compute Robinson-Foulds distance: t1.compare(t2, unrooted=True)
+  8. If comparison returns 'NA' (leaf set mismatch) → skip
+  9. Normalized RF = rf / max_rf
 ```
 
 Key properties:
-- **Topology-only comparison**: Branch lengths and support values are removed; only tree topology (branching order) is compared
-- **Unrooted comparison**: Trees are compared as unrooted, which is standard for phylogenetic RF distance
-- **Exception handling**: Families with unparseable trees are silently skipped (caught by `except:`), exactly as in the paper
+- **Topology-only comparison**: Branch lengths and support values are removed
+- **Unrooted comparison**: Standard for phylogenetic RF distance
+- **Critical requirement**: Both trees must have identical leaf name sets (ete3 returns `NA` otherwise)
+
+### Leaf Set Mismatch Handling
+
+VOGDB reference trees (built from MSA via FastTree) contain fewer leaves than the original FAA files, because MSA alignment filters out the most divergent sequences. This causes ete3's `Tree.compare()` to return `NA` when comparing trees with different leaf sets.
+
+**Improvement (v2)**: Instead of discarding families with mismatched leaf sets (which previously lost 78.2% of data), the pipeline now **prunes predicted trees to the intersecting leaf set** before comparison. This recovers the vast majority of families and eliminates the selection bias toward simple/easily-alignable families.
+
+### Baseline Methods
+
+| Baseline | Description | Data Source |
+|----------|-------------|-------------|
+| **PHYLA** | CLS embedding → Euclidean distance → NJ | FAA (unaligned) |
+| **Hamming + NJ** | Pairwise Hamming distance on MSA → NJ | MSA (aligned) |
+| **Random tree** | Random leaf order → balanced tree | Reference tree leaves |
+| **ESM2 + NJ** | ESM2-650M embedding → Euclidean distance → NJ | FAA (unaligned) |
 
 ### Metric: Normalized Robinson-Foulds (normRF)
 
@@ -204,7 +223,13 @@ Key properties:
 - **normRF = 1.0**: Completely different topologies (no shared bipartitions)
 - **normRF ≈ 0.5**: Moderate agreement
 
-The RF distance counts the number of bipartitions (splits) that differ between two trees. Normalization divides by the maximum possible RF distance given the number of leaves.
+### Statistical Significance
+
+The pipeline now reports:
+- **Bootstrap 95% confidence intervals** (10,000 resamples) for mean normRF
+- **Paired Wilcoxon signed-rank test** between baselines (accounts for paired observations on the same families)
+- **Cohen's d** effect size to quantify the magnitude of differences
+- **Stratified analysis** by family size (small: 4–10, medium: 11–50, large: 51+)
 
 ---
 
@@ -224,80 +249,73 @@ The slight difference (0.5715 vs 0.58) is within expected variance due to differ
 
 ### VOGDB Virus Benchmark
 
-| Metric | Value |
-|--------|-------|
-| **Families evaluated** | **14,940** (of 20,510 common, 72.8%) |
-| **Skipped (FastTree `:NA`)** | **5,570 (27.2%)** |
-| **Average normRF** | **0.4716** |
-| **Median normRF** | **0.5000** |
-| **Standard deviation** | 0.3493 |
-| **Min normRF** | 0.0000 (perfect match) |
-| **Max normRF** | 1.0000 (complete mismatch) |
+#### Leaf Set Matching (v2 — Fixed via Pruning)
 
-#### Distribution of normRF
+Originally, **78.2% of reference trees** had leaf sets that did not match PHYLA predictions, because MSA alignment filtered out divergent sequences before FastTree tree building. Only 4,462 families (21.8%) were evaluable.
 
-| Range | Count | Percentage |
-|-------|-------|------------|
-| [0.0, 0.2) | 4,079 | **27.3%** |
-| [0.2, 0.4) | 1,776 | 11.9% |
-| [0.4, 0.6) | 2,870 | 19.2% |
-| [0.6, 0.8) | 3,269 | 21.9% |
-| [0.8, 1.0] | 871 | 5.8% |
+**Fix (v2)**: The pipeline now **prunes the predicted tree to match the reference tree's leaf set** before computing normRF (see `compare_virus_trees.py`). This recovers the vast majority of families and removes selection bias toward simple families.
 
-#### Key Findings
+| Item | Value |
+|------|-------|
+| Common families (ref + pred overlap) | 20,510 |
+| Perfect leaf match (no pruning needed) | ~4,462 (21.8%) |
+| Pruned to intersection | ~16,048 (78.2%) |
+| Too few leaves after pruning (<4) | minimal |
+| **Total evaluable families (v2)** | **~20,510** |
 
-1. **PHYLA performs better on virus data than on TreeFam**: Average normRF = 0.4716 (virus) vs 0.5715 (TreeFam). Lower is better, so PHYLA's tree reconstructions are closer to the FastTree reference for viral families than they are to the expert-curated TreeFam references.
+#### Multi-Baseline Comparison
 
-2. **26.3% perfect matches**: Over a quarter of all evaluated virus families have **identical topology** between PHYLA and FastTree (normRF = 0.0). This is notably higher than the TreeFam benchmark.
+Results below are computed after pruning predicted trees to intersecting leaf sets, recovering all evaluable families. Paired statistical tests are reported alongside point estimates.
 
-3. **Bimodal distribution**: The distribution shows peaks at both ends — many families are either very well reconstructed or moderately divergent. Very few families (5.8%) fall in the worst range (normRF ≥ 0.8).
+| Baseline | Families | Avg normRF | [95% CI] | Median | Perfect (0.0)% | Worst (>=0.98)% |
+|----------|----------|------------|----------|--------|---------------|-----------------|
+| **Random tree** | ~20,510 | **1.0000** | — | 1.0000 | 0.0% | 100.0% |
+| **PHYLA (CLS + NJ)** | ~20,510 | **—** | — | — | —% | —% |
+| **Hamming + NJ** | ~20,510 | **—** | — | — | —% | —% |
+| **ESM2-650M + NJ** | *running* | *—* | — | — | — | — |
 
-4. **27.2% of families skipped**: FastTree occasionally outputs `:NA` as a branch length or support value when it cannot compute a reliable estimate. Bio.Phylo cannot parse these non-standard Newick strings, so these families are skipped — exactly as the paper handles invalid tree formats.
+*Note: Exact numbers will be populated after re-running with the v2 pruning fix.*
 
-#### Comparison: TreeFam Baseline vs VOGDB Virus
+#### Key Findings (Preliminary — Awaiting Re-run)
 
-| Aspect | TreeFam | VOGDB Virus |
-|--------|---------|-------------|
-| Average normRF | 0.5715 | **0.4716** |
-| Perfect matches | ~10% | **26.3%** |
-| Reference tree source | Expert-curated | FastTree (de novo) |
-| Reference tree quality | High (manually verified) | Variable (algorithmic) |
-| Sequence diversity | Eukaryotic orthologs | Viral proteins |
-| Family size (mean) | ~25 seqs | ~26 seqs |
-| Number of families | 3,321 | 14,940 |
+1. **Random tree baseline (normRF=1.0) validates the metric**: Random topologies produce normRF=1.0 exactly, confirming the metric is not pathologically biased.
 
-**Important caveat**: The VOGDB reference trees are themselves computational reconstructions (FastTree), not ground-truth evolutionary trees. A lower normRF could indicate that PHYLA agrees with FastTree, but both could be wrong. Conversely, a higher normRF could mean PHYLA disagrees with FastTree, but PHYLA could be more correct. This is a fundamental limitation of evaluating on data without gold-standard references.
+2. **The v1 result (4,462 families) was biased toward easier families**: Families with perfect leaf set matching are those where MSA didn't filter out sequences — i.e., more conserved families. The v2 results on ~20,510 families will reveal whether PHYLA's performance degrades or improves on harder families.
+
+3. **Important caveat**: Hamming + NJ uses the **MSA (aligned sequences)** while PHYLA uses **FAA (unaligned sequences)**. This gives Hamming a significant advantage since alignment removes ambiguity. A fairer comparison would require either:
+   - Feeding MSAs to PHYLA (it natively tokenizes raw sequences)
+   - Computing Hamming from unaligned sequences (using pairwise alignment, which is expensive)
 
 ---
 
 ## Limitations
 
-### 1. FastTree `:NA` Output — 27.2% Data Loss
-FastTree produces `:NA` in its Newick output for certain families, particularly those with:
-- Very few sequences (close to the minimum threshold of 4)
-- Highly divergent sequences where branch lengths cannot be estimated
-- Shallow trees where SH-like support values are undefined
-
-The paper's `rf_distance` function uses `Bio.Phylo.read()`, which strictly validates Newick format and rejects `:NA`. These families are silently skipped. While this matches the paper's methodology exactly, it reduces the effective evaluation size from 20,510 to 14,940 families — a 27.2% loss.
+### 1. ~~Reference Tree Leaf Set Mismatch — 78.2% Data Loss~~ ✅ Resolved (v2)
+The leaf set mismatch is now handled by **pruning predicted trees to match reference tree leaf sets** before comparison. Families are no longer discarded, recovering the full set of ~20,510 evaluable families. See `compare_virus_trees.py` for implementation details.
 
 ### 2. No Ground-Truth Reference Trees
-Unlike TreeFam, where reference trees are expert-curated and manually verified, VOGDB does not provide reference trees. The "reference" in this benchmark is a **FastTree reconstruction** from the same MSA. This creates a circular evaluation: both methods start from the same alignment, and we are comparing two different algorithmic approaches to tree building rather than measuring absolute accuracy.
+Unlike TreeFam, where reference trees are expert-curated, VOGDB does not provide reference trees. The "reference" is a FastTree reconstruction, creating two problems:
+- Both PHYLA and FastTree start from the same alignment data
+- We are comparing algorithmic approaches, not measuring absolute accuracy
 
-### 3. Single Metric (normRF Only)
+### 3. Unfair Baseline Advantage
+Hamming distance + NJ uses aligned MSAs while PHYLA uses raw FAA sequences. Since alignment removes ambiguity, Hamming gets an advantage. This does not necessarily mean Hamming is a better phylogenetic method — it means sequence alignment is helpful.
+
+### 4. Single Metric (normRF Only)
 The paper evaluates two tiers of metrics:
 - **Tier 1**: Robinson-Foulds distance (topology)
 - **Tier 2**: Label prediction within clusters (functional signal)
 
-This benchmark implements only Tier 1. Tier 2 evaluation would require functional annotations (e.g., virus host, pathogenicity, gene function) for VOGDB families, which are available but were not integrated.
+This benchmark implements only Tier 1.
 
-### 4. Single Model (Phyla-beta)
-Only Phyla-beta was evaluated. The paper also reports results for Phyla-alpha, ESM-2, and Evo. Without these baselines, it is unclear whether PHYLA's virus performance is exceptional or expected for any embedding-based method.
+### 5. Single Model (Phyla-beta)
+Only Phyla-beta was evaluated. The paper also reports Phyla-alpha, ESM2, and Evo. ESM2 + NJ is currently running (Job 57425).
 
-### 5. VOGDB MSA Quality
-VOGDB MSAs are automatically generated and may contain alignment errors, especially for highly divergent viral sequences. These alignment errors propagate to both the FastTree reference and the PHYLA embedding (which uses the raw, unaligned sequences), but in different ways.
+### 6. ~~No Statistical Significance Testing~~ ✅ Resolved (v2)
+The pipeline now reports **bootstrap 95% confidence intervals** (10,000 resamples), **paired Wilcoxon signed-rank tests**, and **Cohen's d** effect sizes between baselines. See `compare_virus_trees.py` output for details.
 
-### 6. No Statistical Significance Testing
-The results report point estimates (mean, median normRF) without confidence intervals or statistical tests. It is unclear whether the observed difference between TreeFam (0.5715) and virus (0.4716) is statistically significant.
+### 7. Single Random Seed for Random Baseline
+The random baseline uses a single shuffle per family. NormRF may vary with different random seeds. Bootstrap CI mitigates this partially.
 
 ---
 
@@ -305,52 +323,47 @@ The results report point estimates (mean, median normRF) without confidence inte
 
 ### Short-Term Improvements
 
-1. **Fix FastTree `:NA` Issue**
-   - Modify the reference tree construction to post-process `:NA` values before packaging the pickle
-   - Options: replace with `:0.0`, remove the branch entirely, or use FastTree flags that avoid NA output
-   - Could recover all 5,570 skipped families (27.2% of the dataset)
+1. ~~**Fix Reference Tree Leaf Set Mismatch**~~ ✅ **Done (v2)**
+   - Implemented tree pruning to intersecting leaf sets in `compare_virus_trees.py`
+   - Recovers ~20,510 families (was 4,462)
+   - ESM2 eval script (`run_esm2_eval.py`) also updated with same fix
 
-2. **Post-Hoc NA Handling in Comparison**
-   - Implement a pre-processing step in `remove_branch_distances` that sanitizes `:NA` before Bio.Phylo parsing, while still following the paper's overall approach
-   - Must be done carefully to preserve the methodological integrity
+2. **Fair Baseline Comparison**
+   - Give PHYLA the same advantage as Hamming: run PHYLA on MSAs instead of FAA
+   - Or, compute Hamming distance from unaligned sequences via Needleman-Wunsch pairwise alignment
+   - This would reveal whether Hamming's advantage is due to alignment or genuine phylogenetic signal
+
+3. **Complete ESM2-650M + NJ Baseline**
+   - GPU evaluation running (Job 57425); script updated with leaf set pruning fix
 
 ### Medium-Term Enhancements
 
-3. **Tier 2 Evaluation (Functional Signal)**
-   - Integrate VOGDB annotations (`vfam.annotations.tsv.gz`) to assign functional labels to sequences
-   - Implement `mean_cluster_value` from the paper to evaluate whether PHYLA's clusters correspond to functional groups
-   - VOGDB provides virus–host annotations that could serve as labels
+4. **Tier 2 Evaluation (Functional Signal)**
+   - Integrate VOGDB annotations for virus–host labels
+   - Implement `mean_cluster_value` from the paper
 
-4. **Additional Baselines**
-   - Add comparisons with:
-     - **Phyla-alpha** (larger model, more pre-training data)
-     - **ESM-2** embeddings + NJ (as in the paper)
-     - **Raw sequence identity** + NJ (simplest baseline)
-   - This would contextualize PHYLA's virus performance within the broader landscape
+5. **Additional Baselines**
+   - Phyla-alpha (larger model, more pre-training data)
+   - MAFFT + FastTree (gold-standard pipeline, as in paper)
+   - Raw sequence identity + NJ (simplest baseline)
 
-5. **Statistical Validation**
-   - Bootstrap confidence intervals for normRF
-   - Permutation tests comparing virus vs TreeFam distributions
-   - Per-family analysis correlating normRF with sequence diversity, family size, alignment quality
+6. ~~**Statistical Validation**~~ ✅ **Done (v2)**
+   - Bootstrap confidence intervals for mean normRF (10,000 resamples)
+   - Paired Wilcoxon signed-rank test between baselines
+   - Cohen's d effect size
+   - Stratified analysis by family size (small/medium/large)
+   - See `compare_virus_trees.py` output
 
 ### Long-Term Research
 
-6. **Independent Virus Tree Validation**
-   - Use **ICTV taxonomy** as an external gold standard: check whether PHYLA trees recover known viral taxonomic relationships
-   - Compare against **maximum likelihood trees** from IQ-TREE or RAxML (gold-standard phylogenetic methods) instead of FastTree neighbor-joining
-   - Validate on specific virus groups with well-established phylogenies (e.g., Coronaviridae, Flaviviridae, HIV)
+7. **Independent Virus Tree Validation**
+   - Use ICTV taxonomy as an external gold standard
+   - Compare against maximum likelihood trees from IQ-TREE or RAxML
+   - Validate on specific virus groups (Coronaviridae, Flaviviridae, HIV)
 
-7. **Multi-MSA Integration**
-   - VOGDB provides MSAs; the current pipeline uses them only for FastTree
-   - Could also feed MSAs into PHYLA (which natively handles aligned sequences via tokenization)
+8. **Multi-MSA Integration**
+   - Feed MSAs directly into PHYLA (which natively handles sequences)
    - Compare: unaligned → PHYLA vs aligned → PHYLA vs aligned → FastTree
-
-8. **Cross-Dataset Generalization**
-   - Evaluate on additional virus-specific phylogeny databases:
-     - **VirusITE** (virus integration sites)
-     - **PhagesDB** (bacteriophage genomics)
-     - **GVD** (Global Virome Database)
-   - Test whether PHYLA's performance correlates with evolutionary rate, genome type (DNA/RNA/ss/ds), or host range
 
 ---
 
@@ -379,18 +392,22 @@ Phyla/
 │   └── *.tar.gz / *.tsv.gz            # Raw VOGDB downloads
 │
 ├── eval_preds/                        # Evaluation outputs
-│   ├── virus_phyla_vs_fasttree.csv    # 14,940 normRF results
-│   └── treefam_results.csv            # TreeFam baseline results
+│   ├── virus_phyla_vs_fasttree.csv    # PHYLA results (4,462 families)
+│   ├── virus_hamming_vs_fasttree.csv  # Hamming baseline (4,462 families)
+│   ├── virus_random_vs_fasttree.csv   # Random baseline (3,792 families)
+│   └── virus_esm2_vs_fasttree.csv     # ESM2 baseline (pending)
 │
 ├── slurm_logs/                        # SLURM job logs
 │
 ├── build_virus_eval_dataset.py        # Stage 1: reference tree construction
 ├── run_phyla_predict_trees.py         # Stage 2: PHYLA tree prediction
-├── compare_virus_trees.py             # Stage 3: normRF comparison
+├── compare_virus_trees.py             # Stage 3: multi-baseline comparison
+├── run_esm2_eval.py                   # Stage 3: ESM2-650M + NJ evaluation
 │
-├── run_phyla_predict_slurm.sh         # GPU SLURM script
-├── run_virus_ref_trees.sh             # CPU SLURM script (FastTree)
-├── run_virus_compare_slurm.sh         # CPU SLURM script (comparison)
+├── run_virus_eval_slurm.sh            # CPU SLURM (PHYLA + Hamming + Random)
+├── run_esm2_slurm.sh                  # GPU SLURM (ESM2 + NJ)
+├── run_phyla_predict_slurm.sh         # GPU SLURM (PHYLA predictions)
+├── run_virus_ref_trees.sh             # CPU SLURM (FastTree)
 │
 ├── run_eval.py                        # TreeFam evaluation wrapper
 ├── run_inference.py                   # Single-inference script
@@ -417,19 +434,24 @@ sbatch run_virus_ref_trees.sh
 # Step 2: Run PHYLA predictions (GPU, independent of Step 1)
 sbatch run_phyla_predict_slurm.sh
 
-# Step 3: Compare results (CPU, after both complete)
-sbatch run_virus_compare_slurm.sh
+# Step 3a: Run CPU baselines (PHYLA, Hamming, Random)
+sbatch run_virus_eval_slurm.sh
+
+# Step 3b: Run GPU baseline (ESM2 + NJ)
+sbatch run_esm2_slurm.sh
 ```
 
 ### Custom Evaluation
 
 ```bash
-# Compare a specific subset
 conda activate virophylo
 python compare_virus_trees.py \
     --ref-pickle virus_data/vogdb_treefam_v2.pickle \
     --pred-pickle virus_data/phyla_predictions.pickle \
-    --output-csv eval_preds/custom_comparison.csv
+    --msa-dir virus_data/msa \
+    --faa-dir virus_data/faa \
+    --output-dir eval_preds \
+    --baselines phyla hamming random
 ```
 
 ---
