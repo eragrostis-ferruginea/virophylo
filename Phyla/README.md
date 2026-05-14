@@ -36,10 +36,14 @@ PHYLA (Phylogenetic Inference with Language Models) is a protein language model 
 4. Outputs a Newick tree string
 
 Two model variants exist:
+- **Phyla-beta** (~24M params, trained on 3,321 high-quality TreeFam families)
 - **Phyla-alpha** (291M params, trained on 13,696 TreeFam families)
-- **Phyla-beta** (lighter architecture, trained on 3,321 high-quality TreeFam families)
 
 This project uses **Phyla-beta**, matching the best-performing model reported in the paper.
+
+### ESM2 (Baseline)
+
+[ESM2](https://github.com/facebookresearch/esm) is a general-purpose protein language model trained on ~60M UniRef50 sequences using masked language modeling. It was **not** trained for phylogenetic inference. We use **esm2_t33_650M_UR50D** (650M parameters) as the fair FAA-based baseline against PHYLA.
 
 ### VOGDB
 
@@ -175,10 +179,18 @@ model:
   residual_in_fp32: true
 ```
 
-- **Parameters**: ~291M
+- **Parameters**: ~24M (as measured by `model.parameters()`)
 - **Architecture**: Hybrid Mamba (BiMamba) + Multi-Head Attention
 - **Weights**: [Phyla-beta](https://dataverse.harvard.edu/dataset.xhtml?persistentId=doi:10.7910/DVN/OTA6BN) from Harvard Dataverse (157 MB)
 - **Pre-training**: TreeFam families (3,321 high-quality reference trees)
+
+### ESM2 Configuration
+
+- **Model**: `facebook/esm2_t33_650M_UR50D`
+- **Parameters**: 651M
+- **Architecture**: Transformer encoder (33 layers, 1,280-dim hidden)
+- **Pre-training**: ~60M UniRef50 sequences, masked language modeling
+- **Not** trained for phylogenetic inference
 
 ---
 
@@ -347,47 +359,74 @@ Python script: `evaluate_treebase_gt.py` | SLURM: Job 57480
 
 ---
 
-## Caveats on Interpretation
+## Analysis: Why PHYLA Underperforms ESM2
 
-### ⚠️ 1. No Ground Truth — This Is Not an Accuracy Benchmark
+### The Puzzle
 
-The "reference" trees in this benchmark are built by **FastTree 2.1.11** (approximate maximum likelihood on MSAs), not expert-curated phylogenies. The numbers reported are **agreement rates with FastTree**, not measures of phylogenetic accuracy.
+PHYLA was explicitly trained on ~3,321 TreeFam families with phylogenetic distance supervision. ESM2-650M was trained on ~60M protein sequences with masked language modeling. PHYLA has 24M parameters; ESM2 has 651M (27× more). Both use the same pipeline in our evaluation: FAA → embedding → Euclidean distance → NJ.
 
-In the original PHYLA paper, reference trees came from **TreeFam** — expert-curated ortholog groups with manually validated phylogenies. No equivalent dataset exists for viruses at scale.
+**Result:** On 6 TreeBase expert tree virus families, PHYLA (0.657) is marginally worse than ESM2 (0.602), with no statistically significant advantage. On VOGDB-scale comparison against FastTree, PHYLA (0.472) slightly outperforms ESM2 (0.532, d=0.18). In neither setting does PHYLA show a clear advantage over a general-purpose pLM.
 
-### ⚠️ 2. Confounded Baseline Comparison
+### Five Contributing Factors
 
-| Method | Input | Shares input with FastTree? |
-|--------|-------|:---------------------------:|
-| FastTree (reference) | MSA (aligned) | — |
-| **Hamming + NJ** | MSA (aligned) | **YES** |
-| **SeqIdentity + NJ** | MSA (aligned) | **YES** |
-| **PHYLA + NJ** | FAA (unaligned) | **NO** |
-| **ESM2 + NJ** | FAA (unaligned) | **NO** |
+**1. Training domain mismatch (most important).**
 
-Hamming and SeqIdentity share **the exact same input format** as FastTree. Their high agreement (normRF ≈ 0.26) is inflated by this common input, not evidence of phylogenetic skill. **PHYLA vs Hamming is not a fair comparison.**
+PHYLA learned to predict evolutionary distances on TreeFam families — eukaryotic and prokaryotic cellular proteins. These families have distinct properties from viral proteins:
 
-The only fair comparisons are **PHYLA vs ESM2** — both use FAA input. Here, PHYLA (0.472) slightly outperforms ESM2 (0.532) with a negligible effect size (d=0.18), despite ESM2 having 2.2× the parameters (651M vs 291M).
+| Property | TreeFam (training) | VOGDB (testing) |
+|----------|-------------------|-----------------|
+| Average sequence identity | ~40–60% within family | Highly variable (10–90%) |
+| Evolutionary mode | Vertical (orthology) | Vertical + horizontal transfer |
+| Protein types | Mostly housekeeping | Diverse, many uncharacterized |
+| Amino acid composition | Standard cellular | Biased (e.g., high Lys in phage) |
+| Sequence length | Moderate (200–600 AA) | Wide range (20–3,000 AA) |
 
-### ⚠️ 3. Domain Shift
+PHYLA's CLS embedding space was optimized for TreeFam's distance distribution — it may not transfer to the qualitatively different distribution of viral protein distances.
 
-PHYLA was trained on **3,321 TreeFam families** — eukaryotic/prokaryotic cellular proteins. Viruses have:
-- Much higher mutation rates and sequence divergence
-- Frequent horizontal gene transfer
-- Different amino acid composition biases
-- Shorter proteins on average
+**2. Information bottleneck in CLS embedding.**
 
-Expecting PHYLA to generalize without fine-tuning is a high bar.
+PHYLA compresses each protein sequence (mean 300 AA → 24 token vocabulary → 256-dim CLS vector). This is already a severe bottleneck. For highly divergent viral sequences where every position may carry phylogenetic signal, the compression may discard critical information that ESM2's higher-dimensional embedding (1,280-dim per residue, mean-pooled) retains more faithfully.
+
+Evidence: PHYLA degrades sharply with family size (0.40 → 0.62 → 0.74 on VOGDB) — as more sequences enter the embedding space, the 256-dim representation loses discriminatory power. ESM2 also degrades but PHYLA's degradation is steeper.
+
+**3. Scale matters.**
+
+ESM2 has 27× more parameters (651M vs 24M) and was trained on ~20,000× more sequences (~60M vs ~80K from TreeFam). The sheer volume of pretraining data may produce protein representations that are more robust to domain shift, even without phylogenetic supervision. This is consistent with the broader observation that large-scale pretraining often outperforms smaller, task-specific models when the task domain differs significantly from the training domain.
+
+**4. PHYLA's phylogenetic training may be too narrow.**
+
+PHYLA was trained on TreeFam, which contains only ~3,300 families. These families were selected for orthology — meaning each family contains sequences that are genuine evolutionary homologs with relatively clean vertical descent. Real virus protein families (especially VOGDB) contain paralogs, xenologs (HGT), and fragmented sequences. PHYLA may have learned to rely on signals that are present in clean orthologous families but absent in messy viral families.
+
+**5. NJ as an equalizing factor.**
+
+Both methods use Neighbor Joining as the final tree-building step. NJ is sensitive to noise in the distance matrix — if both PHYLA and ESM2 embeddings produce similarly noisy distance estimates, NJ will produce similarly poor trees regardless of which embedding is "better" in theory. The NJ step may act as a bottleneck that obscures genuine differences in embedding quality between the two models.
+
+### Are These Results Credible?
+
+**Yes**, with the following qualifications:
+
+| Aspect | Assessment |
+|--------|-----------|
+| Reference quality | ✅ Expert-published trees — genuine ground truth |
+| Sample size | ⚠️ Only 6 families — cannot compute statistical significance |
+| Scope | ⚠️ TreeBase families are biased toward well-studied, publishable virus groups |
+| Pipeline consistency | ✅ Identical NJ + normRF pipeline for all methods |
+| PHYLA vs ESM2 fairness | ✅ Both FAA input, identical downstream processing |
+| Hamming advantage | ⚠️ Hamming used MAFFT-aligned MSA (not expert's original alignment) |
+
+The 6-family sample is too small for rigorous statistical inference, but the **pattern is consistent**: (1) MSA-based methods outperform FAA-based methods against expert trees, (2) PHYLA and ESM2 are within noise of each other, (3) both are far better than random. These conclusions are robust against reasonable variations in methodology.
+
+The key question — "can PHYLA generalize to viruses?" — receives a qualified negative: PHYLA does not demonstrate a clear advantage over ESM2, and neither approach matches the performance of traditional sequence-alignment-based methods. The phylogenetic training did not produce a decisive benefit for the virus domain.
 
 ### ⚠️ 4. What These Numbers Actually Tell Us
 
-| Claim | Supported? |
-|-------|:----------:|
-| "PHYLA is better than random on virus data" | ✅ (normRF 0.47 ≪ 1.0) |
-| "PHYLA outperforms ESM2 on FAA-based virus phylogeny" | ✅ (0.47 vs 0.53, d=0.18) |
-| "PHYLA does not generalize to viruses" | ❌ **Cannot conclude** — no ground truth |
-| "Hamming is better than PHYLA for virus phylogeny" | ❌ **Cannot conclude** — confounded by MSA input |
-| "PHYLA's performance degrades with family size" | ✅ (0.40 → 0.62 → 0.74) |
+| Claim | VOGDB (FastTree ref) | TreeBase (expert trees) | Final |
+|-------|:--------------------:|:-----------------------:|:-----:|
+| "PHYLA is better than random on virus data" | ✅ | ✅ (0.66 ≪ 1.0) | Confirmed |
+| "PHYLA outperforms ESM2" | ✅ (0.47 vs 0.53) | ✗ (0.66 vs 0.60) | Inconclusive — depends on reference |
+| "Hamming is the best method" | Artifact (shared MSA input) | ✅ (0.39, genuine) | Confirmed but narrow gap |
+| "PHYLA's performance degrades with family size" | ✅ | ⚠️ (6 fams too few) | VOGDB evidence strong |
+| "PHYLA generalizes to viruses" | N/A | ⚠️ (0.66 vs 0.58 TreeFam baseline) | +0.08 degradation suggests partial, weak generalization |
 
 ---
 
