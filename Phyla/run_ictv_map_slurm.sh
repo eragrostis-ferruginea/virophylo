@@ -2,10 +2,10 @@
 #SBATCH --job-name=build_ictv_map
 #SBATCH --output=/home/jianpinhe3/virophylo/Phyla/slurm_logs/ictv_map_%j.out
 #SBATCH --error=/home/jianpinhe3/virophylo/Phyla/slurm_logs/ictv_map_%j.err
-#SBATCH --time=02:00:00
+#SBATCH --time=04:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=8
 #SBATCH --partition=cpu1
 
 SCRIPT_DIR="/home/jianpinhe3/virophylo/Phyla"

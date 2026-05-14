@@ -35,29 +35,42 @@ def build_ictv_lookup(msl_path):
     return genus_taxonomy, genus_sorted
 
 
-def match_vogdb_to_ictv(vogdb_name, genus_taxonomy, genus_sorted):
+def match_vogdb_to_ictv(name, genus_taxonomy, genus_sorted):
     """
-    Multi-strategy matcher: VOGDB host string → ICTV (genus, family, order, class).
+    Fast multi-strategy matcher. Uses string split + containment, no regex.
     Returns (match_type, taxonomy_tuple or None).
     """
-    name = vogdb_name.strip().lower()
+    name = name.strip().lower()
+    if not name:
+        return 'no_match', None
 
-    # 1. Exact match (name IS an ICTV genus)
+    # 1. Exact match
     if name in genus_taxonomy:
         return 'exact', genus_taxonomy[name]
 
-    # 2. Word-boundary match (genus appears as whole word)
+    # 2. Check whole words (split on spaces, hyphens, underscores)
+    name_words = set(name.replace('-', ' ').replace('_', ' ').split())
     for genus_lower in genus_sorted:
-        pattern = r'\b' + re.escape(genus_lower) + r'\b'
-        if re.search(pattern, name):
-            return 'word_boundary', genus_taxonomy[genus_lower]
+        if genus_lower in name_words:
+            return 'word', genus_taxonomy[genus_lower]
 
-    # 3. Long substring match (>=6 chars, contiguous, greedy longest-first)
+    # 3. Check contiguous substrings for longer genus names (>=6 chars)
     for genus_lower in genus_sorted:
         if len(genus_lower) >= 6 and genus_lower in name:
             return 'substring', genus_taxonomy[genus_lower]
 
     return 'no_match', None
+
+
+# Global cache for species name matching
+_MATCH_CACHE = {}
+
+def match_with_cache(name, genus_taxonomy, genus_sorted):
+    if name in _MATCH_CACHE:
+        return _MATCH_CACHE[name]
+    result = match_vogdb_to_ictv(name, genus_taxonomy, genus_sorted)
+    _MATCH_CACHE[name] = result
+    return result
 
 
 def parse_species_labels(faa_path):
@@ -145,7 +158,7 @@ def main():
             if host_str is None:
                 seq_tax[seq_name] = None
                 continue
-            mt, tax = match_vogdb_to_ictv(host_str, genus_taxonomy, genus_sorted)
+            mt, tax = match_with_cache(host_str, genus_taxonomy, genus_sorted)
             match_type_stats[mt] += 1
             if tax:
                 seq_tax[seq_name] = tax

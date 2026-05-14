@@ -274,9 +274,11 @@ Results computed after pruning predicted trees to intersecting leaf sets. Paired
 |----------|----------|------------|----------|--------|---------------|-----------------|
 | **Random tree** | 14,270 | **1.0000** | [1.0, 1.0] | 1.0000 | 0.0% | 100.0% |
 | **PHYLA (CLS + NJ)** | 14,940 | **0.4716** | [0.466, 0.477] | 0.5000 | 26.3% | 13.9% |
+| **ESM2-650M + NJ** | 14,940 | **0.5320** | — | 0.5926 | 22.8% | — |
 | **Hamming + NJ** | 14,940 | **0.2638** | [0.259, 0.269] | 0.2000 | 41.3% | 8.5% |
 | **SeqIdentity + NJ** | 14,940 | **0.2621** | [0.257, 0.267] | 0.2000 | 41.4% | 8.5% |
-| **ESM2-650M + NJ** | *running* | *—* | — | — | — | — |
+
+**Key observation:** Among FAA-based methods (PHYLA, ESM2), PHYLA's 0.472 is better than ESM2's 0.532 despite ESM2 being a 651M-parameter general-purpose model vs PHYLA's targeted phylogenetic training. However, both are far worse than MSA-based baselines (~0.26), which share input format with the FastTree reference — this is confounded (see caveats).
 
 **Paired Comparisons:**
 
