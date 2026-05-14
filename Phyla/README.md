@@ -213,9 +213,10 @@ VOGDB reference trees (built from MSA via FastTree) contain fewer leaves than th
 | Baseline | Description | Data Source |
 |----------|-------------|-------------|
 | **PHYLA** | CLS embedding → Euclidean distance → NJ | FAA (unaligned) |
-| **Hamming + NJ** | Pairwise Hamming distance on MSA → NJ | MSA (aligned) |
-| **Random tree** | Random leaf order → balanced tree | Reference tree leaves |
 | **ESM2 + NJ** | ESM2-650M embedding → Euclidean distance → NJ | FAA (unaligned) |
+| **Hamming + NJ** | Pairwise Hamming distance on MSA → NJ | MSA (aligned) |
+| **SeqIdentity + NJ** | Pairwise sequence identity on MSA → 1-id → NJ | MSA (aligned) |
+| **Random tree** | Random leaf order → balanced tree | Reference tree leaves |
 
 ### Metric: Normalized Robinson-Foulds (normRF)
 
@@ -265,7 +266,7 @@ Originally, **78.2% of reference trees** had leaf sets that did not match PHYLA 
 
 *5,570 families have <4 leaves after pruning because many VOGDB families are very small (2–3 sequences).*
 
-#### Multi-Baseline Comparison
+#### Multi-Baseline Comparison (v2 — with pruning + SeqIdentity)
 
 Results computed after pruning predicted trees to intersecting leaf sets. Paired statistical tests are reported alongside point estimates.
 
@@ -274,12 +275,18 @@ Results computed after pruning predicted trees to intersecting leaf sets. Paired
 | **Random tree** | 14,270 | **1.0000** | [1.0, 1.0] | 1.0000 | 0.0% | 100.0% |
 | **PHYLA (CLS + NJ)** | 14,940 | **0.4716** | [0.466, 0.477] | 0.5000 | 26.3% | 13.9% |
 | **Hamming + NJ** | 14,940 | **0.2638** | [0.259, 0.269] | 0.2000 | 41.3% | 8.5% |
+| **SeqIdentity + NJ** | 14,940 | **0.2621** | [0.257, 0.267] | 0.2000 | 41.4% | 8.5% |
 | **ESM2-650M + NJ** | *running* | *—* | — | — | — | — |
 
-**Paired Comparison (PHYLA vs Hamming):**
-- Wilcoxon signed-rank test: **p ≈ 0** (highly significant)
-- Cohen's d: **0.637** (medium effect size)
-- Mean difference: **+0.208** (PHYLA worse)
+**Paired Comparisons:**
+
+| Comparison | Mean Diff | Cohen's d | Wilcoxon p | Significant? |
+|------------|:---------:|:---------:|:----------:|:------------:|
+| PHYLA vs Hamming | +0.208 | 0.637 (medium) | ≈0 | YES |
+| PHYLA vs SeqIdentity | +0.210 | 0.641 (medium) | ≈0 | YES |
+| Hamming vs SeqIdentity | +0.002 | 0.058 (negligible) | 0.074 | **NO** |
+
+*Hamming and SeqIdentity are statistically indistinguishable — both MSA-based distance measures converge to the same NJ trees.*
 
 #### Stratified Analysis by Family Size
 
@@ -301,19 +308,19 @@ Results computed after pruning predicted trees to intersecting leaf sets. Paired
 
 #### Key Findings
 
-1. **Random tree baseline (normRF=1.0) validates the metric**: Random topologies produce normRF=1.0 exactly, confirming the metric is not pathologically biased.
+1. **Random tree baseline (normRF=1.0) validates the metric**: Random topologies produce normRF=1.0 exactly.
 
-2. **PHYLA vs v1 comparison confirms selection bias**: PHYLA's avg normRF degraded from **0.444 (v1, easy families only)** to **0.472 (v2, all families)**, confirming that the v1 result was biased toward conserved families. However, the degradation is modest (+0.028).
+2. **Hamming and SeqIdentity are indistinguishable** (d=0.058, p=0.074): Both MSA-based distance measures produce essentially identical NJ trees. This is expected — for aligned sequences, Hamming distance and sequence identity encode the same information.
 
-3. **Hamming + NJ dramatically outperforms PHYLA**: Hamming achieves avg normRF=0.264 vs PHYLA's 0.472 (Cohen's d=0.64, p≈0). The difference is consistent across all family sizes.
+3. **PHYLA is significantly worse than MSA-based baselines** (d≈0.64, p≈0): The gap is medium-to-large in effect size and highly significant. However, this comparison is confounded by input format (see caveat below).
 
-4. **PHYLA degrades sharply with family size**: Performance drops from normRF=0.40 (4–10 seqs) → 0.62 (11–50) → 0.74 (51+). Hamming is more robust: 0.24 → 0.32 → 0.38.
+4. **PHYLA vs v1 comparison confirms moderate selection bias**: PHYLA's avg normRF went from 0.444 (v1, 4,462 easy families) → 0.472 (v2, 14,940 families). The degradation is modest (+0.028), suggesting the v1 result wasn't massively biased.
 
-5. **PHYLA shows a bimodal distribution**: 27.3% near-perfect matches (normRF<0.2) but 21.9% poor matches (0.6–0.8). This suggests PHYLA either reconstructs the topology well or fails significantly, with little middle ground.
+5. **PHYLA degrades sharply with family size**: From 0.40 (4–10 seqs) → 0.62 (11–50) → 0.74 (51+). MSA-based methods are much more robust (0.24 → 0.32 → 0.37).
 
-6. **Important caveat**: Hamming + NJ uses the **MSA (aligned sequences)** while PHYLA uses **FAA (unaligned sequences)**. This gives Hamming a significant advantage since alignment removes ambiguity. A fairer comparison would require either:
-   - Feeding MSAs to PHYLA (it natively tokenizes raw sequences)
-   - Computing Hamming from unaligned sequences (using pairwise alignment, which is expensive)
+6. **PHYLA shows a bimodal distribution**: 27.3% near-perfect matches (normRF<0.2) but 21.9% poor matches (0.6–0.8), suggesting PHYLA either succeeds or fails — little middle ground.
+
+7. **⚠️ Critical caveat — Input format asymmetry**: Hamming and SeqIdentity use **MSA** (aligned sequences), the same input that FastTree uses to build reference trees. PHYLA uses **FAA** (unaligned). The MSA-based methods share input information with the reference, giving them a systematic advantage. **ESM2 (also FAA-based) is the only truly fair comparison** — results pending (Job 57433, A100).
 
 ---
 
