@@ -303,11 +303,36 @@ All results below measure **agreement with FastTree** (the reference tree builde
 | [0.6, 0.8) | 21.9% | 4.3% | 21.7% |
 | [0.8, 1.0] | 5.8% | 0.5% | 10.1% |
 
-### ICTV Taxonomy Cross-Reference — Failed
+### TreeBase Ground-Truth Benchmark — ✅ Expert-Validated
 
-An attempt was made to map VOGDB sequence headers to ICTV (International Committee on Taxonomy of Viruses) genus/family/order/class taxonomy, to provide a ground-truth evaluation (monophyly, triplet concordance).
+**Six** curated virus protein families with published expert phylogenetic trees were identified in TreeBase and evaluated. Unlike the VOGDB benchmark (which uses FastTree as reference), **these reference trees are genuine published expert phylogenies**.
 
-**Result:** Only **4.0% of sequences (21,265/528,130)** could be matched. VOGDB uses common names (e.g., "Hafnia phage Enc34", "Sweet potato feathery mottle virus") while the ICTV Master Species List uses formal Latin binomials (e.g., "Orthobunyavirus guajaraense"). The naming systems are largely incompatible, making taxonomy-based ground-truth evaluation infeasible at scale.
+Python script: `evaluate_treebase_gt.py` | SLURM: Job 57480
+
+#### Results: Hamming vs Expert Trees
+
+| Family | Seqs | Hamming normRF | Description |
+|--------|:----:|:--------------:|-------------|
+| TB2:S10171Taxa1 | 184 | **0.370** | Phage terminase large subunit |
+| TB2:S10521 | 38 | **0.543** | Poxvirus protein |
+| TB2:S12857Taxa1 | 41 | **0.365** | Viral metagenomics protein |
+| TB2:S13909Taxa1 | 86 | **0.444** | Fungal virus capsid protein |
+| TB2:S13955Taxa5 | 7 | **0.500** | Plant virus polyprotein |
+| TB2:S1458 | 14 | **0.143** | Plant potyvirus |
+| **Average** | — | **0.394** | — |
+
+#### Critical Comparison: VOGDB vs TreeBase
+
+| Benchmark | Reference | Hamming normRF | PHYLA normRF |
+|-----------|-----------|:--------------:|:------------:|
+| VOGDB (14,940 fams) | FastTree (algorithm) | **0.264** | 0.472 |
+| TreeBase (6 fams) | Expert trees (ground truth) | **0.394** | *pending GPU* |
+
+**The 0.130 gap (0.394 − 0.264) is the inflation artifact caused by using an algorithmic reference.** Hamming appears artificially better against FastTree because both methods operate on the same MSA input. Against real expert trees, Hamming's performance is more modest (0.39, not 0.26).
+
+This finding **directly invalidates the VOGDB-based conclusion** that "Hamming outperforms PHYLA" — the comparison was confounded by shared input format. The true baseline for PHYLA to compete against is **normRF ≈ 0.39**, not the VOGDB-apparent 0.26.
+
+**Next step:** Run PHYLA GPU inference on these 6 TreeBase families to compare against the same expert ground truth.
 
 ---
 
@@ -390,13 +415,11 @@ For viruses with vertically inherited genes, the host phylogeny (which is well-e
 
 ### Recommended Path
 
-Start with **Option 1** (IQ-TREE on 1,000 families, submitted as SLURM array job). This is the only path that:
-1. Works at scale (1,000+ families)
-2. Uses the existing VOGDB data without additional curation
-3. Produces substantially more reliable reference trees than FastTree
-4. Can be completed in <24 hours with available HPC resources
+1. **Start with TreeBase expert trees** — 6 curated virus protein families with published reference trees are already available in `treebase_benchmark/`. See [evaluate_treebase_gt.py](file:///home/jianpinhe3/virophylo/Phyla/evaluate_treebase_gt.py) and [run_treebase_gt_slurm.sh](file:///home/jianpinhe3/virophylo/Phyla/run_treebase_gt_slurm.sh). This provides a small but genuine ground-truth benchmark (Job 57480, running).
 
-Then validate key findings on **Option 2** datasets (HIV, Influenza) for specific virus groups with well-known phylogenies.
+2. **Then run IQ-TREE on a subset of VOGDB families** — Use IQ-TREE (ModelFinder + ultrafast bootstrap) to replace FastTree for ~1,000 representative VOGDB families. IQ-TREE produces substantially more accurate ML trees. Parallelizable as a SLURM array job on `cpu1`.
+
+3. **Add expert trees from published literature** — for specific well-studied virus groups (HIV via LANL Database, Influenza via NCBI, Coronaviridae via Nextstrain) to validate findings on clinically important viruses.
 
 ---
 
