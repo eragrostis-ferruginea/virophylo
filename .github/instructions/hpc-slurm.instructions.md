@@ -1,6 +1,6 @@
 ---
 description: "Use when submitting SLURM jobs, writing batch scripts, managing conda environments, or running computation on the HPC cluster. Covers partition selection, GPU requests, conda setup, and login node restrictions."
-applyTo: ["**/*.sh", "**/*.py", "**/*.yaml", "**/*.yml"]
+applyTo: "**/*.{sh,py,yaml,yml}"
 ---
 
 # HPC & SLURM Instructions (virophylo)
@@ -8,37 +8,43 @@ applyTo: ["**/*.sh", "**/*.py", "**/*.yaml", "**/*.yml"]
 ## Login Node Rules
 
 - **Never run compute tasks directly on login nodes.** All computation must be submitted via `sbatch` or `srun`.
+- **Only login nodes have network access.** Compute nodes cannot access the internet. All data downloads and Python package installations (`pip install`, `conda install`) must be performed on the login node.
 - Use `sbatch <script.sh>` to submit batch jobs.
 - For quick interactive testing, use `srun --partition=cpu1 --time=00:30:00 --cpus-per-task=2 --pty bash` to get an interactive session on a compute node.
 - Monitor jobs with `squeue -u $USER` or `sacct -j <job_id>`.
 
 ## SLURM Script Template
 
+### Basic Template (CPU)
+
 ```bash
 #!/bin/bash
 #SBATCH --job-name=<short_name>
-#SBATCH --output=<path_to_logs>/<name>_%j.out
-#SBATCH --error=<path_to_logs>/<name>_%j.err
-#SBATCH --time=HH:MM:SS          # Format: DD-HH:MM:SS for >24h
-#SBATCH --nodes=1
-#SBATCH --ntasks=1
+#SBATCH --output=../slurm_logs/<name>_%j.out
+#SBATCH --error=../slurm_logs/<name>_%j.err
+#SBATCH --time=HH:MM:SS
 #SBATCH --cpus-per-task=<N>
-#SBATCH --mem=<size>G            # Optional: request specific memory
-#SBATCH --partition=<partition>  # gpu2 for A100, gpu1 for RTX4080/4090, cpu1 for CPU
-
-# GPU jobs: add --gres (gpu2: 4×A100, gpu1: 8×RTX)
-#SBATCH --gres=gpu:<N>           # Number of GPUs (max 4 for gpu2, 8 for gpu1)
+#SBATCH --partition=cpu1
 
 SCRIPT_DIR="/home/jianpinhe3/virophylo/Phyla"
 cd "$SCRIPT_DIR"
-
-# Activate conda environment (explicit path — do NOT use conda init)
 source /home/jianpinhe3/miniforge3/etc/profile.d/conda.sh
 conda activate virophylo
-
-# Run your command
 python <script.py> <args>
 ```
+
+### GPU Template (add these lines)
+
+```bash
+#SBATCH --partition=gpu1|gpu2
+#SBATCH --gres=gpu:<N>           # gpu1: max 8, gpu2: max 4
+```
+
+### Common Options
+
+- `--mem=<size>G` — request specific memory (optional)
+- `--time=DD-HH:MM:SS` — use this format for jobs >24h
+- `--nodes=1 --ntasks=1` — implied, rarely need to change
 
 ## Conda Environment
 
@@ -49,12 +55,25 @@ python <script.py> <args>
 
 ## Partitions
 
-| Partition | GPU | Nodes | GPU Details | Use Case |
-|-----------|-----|-------|-------------|----------|
-| `gpu1` | Yes | `gpu[1-2]` | **RTX 4080** × 8 each | 默认分区；通用 GPU 任务（轻量推理、调试） |
-| `gpu1` | Yes | `gpu3` | **RTX 4090** × 8 | 默认分区；单卡显存更大 |
-| `gpu2` | Yes | `gpu[11-12]` | **NVIDIA A100** × 4 each | **首选分区**；大模型推理（PHYLA、ESM-2）、训练任务 |
-| `cpu1` | No | `cpu[1,3-7]` | — | CPU 任务（FastTree、数据处理、树比较） |
+### Decision Tree
+
+```
+Need GPU?
+├─ Yes → How many GPUs?
+│        ├─ 1–4 → Are you running PHYLA/ESM-2 or training?
+│        │        ├─ Yes → gpu2 (A100, preferred)
+│        │        └─ No  → gpu1 (RTX 4080/4090)
+│        └─ 5–8 → gpu1 (RTX, up to 8 GPUs)
+└─ No  → cpu1
+```
+
+### Partition Details
+
+| Partition | GPU Model | GPUs/Node | Best For |
+|-----------|-----------|-----------|----------|
+| `cpu1` | — | — | FastTree, data processing, tree comparison |
+| `gpu1` | RTX 4080/4090 | 8 | Light inference, debugging, general GPU |
+| `gpu2` | A100 (80GB) | 4 | PHYLA, ESM-2, large model training/inference |
 
 ## Best Practices
 
