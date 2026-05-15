@@ -58,6 +58,8 @@ def build_nj_esm2(model, tok, seqs, names, dev='cuda:0'):
 TBFAMS = [
     ('TB2:S10171Taxa1', 'Phage terminase'),
     ('TB2:S10521', 'Poxvirus protein'),
+    ('TB2:S12677Taxa1', 'RHDV calicivirus (Lagovirus)'),
+    ('TB2:S12677Taxa2', 'RHDV calicivirus (full set)'),
     ('TB2:S12857Taxa1', 'Viral metagenomics'),
     ('TB2:S13909Taxa1', 'Fungal virus capsid'),
     ('TB2:S13955Taxa5', 'Plant virus polyprotein'),

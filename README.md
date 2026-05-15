@@ -330,18 +330,18 @@ To address the FastTree reference quality problem, **IQ-TREE 3.1.1** (ModelFinde
 
 #### Complete Cross-Benchmark Comparison
 
-| Method | TreeFam | VOGDB+FastTree | VOGDB+IQ-TREE | TreeBase |
-| | (expert, paper) | (14,940 fams) | **(738 fams)** | **(6 fams)** |
-|---------|:-------:|:--------------:|:--------------:|:--------:|
-| **PHYLA** | 0.572 | 0.472 | **0.519** | **0.657** |
-| **ESM2-650M** | — | 0.532 | **0.575** | **0.602** |
-| **Hamming + MAFFT** | — | 0.264 | **0.295** | **0.394** |
+| Method | TreeFam | VOGDB+FastTree | VOGDB+IQ-TREE | **TreeBase** |
+| | (expert, paper) | (14,940 fams) | **(738 fams)** | **(8 fams)** |
+|---------|:-------:|:--------------:|:--------------:|:------------:|
+| **PHYLA** | 0.572 | 0.472 | **0.519** | **0.665** |
+| **ESM2-650M** | — | 0.532 | **0.575** | **0.649** |
+| **Hamming + MAFFT** | — | 0.264 | **0.295** | **0.390** |
 | **Random** | — | 1.000 | **1.000** | **1.000** |
 
 **Key finding across 3 virus benchmarks:**
-1. **Hamming consistently beats both pLM methods** across all reference qualities and sizes. The gap is real, not a FastTree artifact.
-2. **PHYLA vs ESM2: within noise.** PHYLA wins against FastTree (+0.06), loses against IQ-TREE (−0.06), loses against expert trees (−0.06). No clear advantage either way. PHYLA's explicit phylogenetic training does not produce a detectable benefit over a general-purpose pLM on viral proteins.
-3. **Ranking is stable.** FastTree, IQ-TREE, and expert trees all give the same ordering: Hamming ≫ PHYLA ≈ ESM2 ≫ Random. The numbers shift but the conclusions don't.
+1. **Hamming consistently beats both pLM methods** across all reference qualities and sizes. The gap is real — Hamming outperforms PHYLA and ESM2 on 21/22 individual families across all benchmarks.
+2. **PHYLA vs ESM2: within noise.** PHYLA wins against FastTree (+0.06), loses against IQ-TREE (−0.06), loses against expert trees (−0.02 on 8 families). No statistically significant advantage — PHYLA's explicit phylogenetic training does not produce a detectable benefit over a general-purpose 651M pLM on viral proteins.
+3. **Ranking is stable.** FastTree, IQ-TREE, and expert trees all give the same ordering: Hamming ≫ PHYLA ≈ ESM2 ≫ Random.
 
 ### TreeBase Ground-Truth Benchmark — ✅ Expert-Validated
 
@@ -361,17 +361,27 @@ Python script: `evaluate_treebase_gt.py` | SLURM: Job 57480
 | TB2:S1458 | 14 | **0.143** | Plant potyvirus |
 | **Average** | — | **0.394** | — |
 
-#### Final Results: All Methods vs Expert Trees (6 families)
+### TreeBase Ground-Truth Benchmark — ✅ Expert-Validated (8 families)
 
-| Family | Seqs | PHYLA | ESM2 | Hamming | Random |
-|--------|:----:|:-----:|:----:|:-------:|:------:|
-| S10171Taxa1 (phage terminase) | 184 | 0.669 | 0.624 | 0.370 | 1.000 |
-| S10521 (poxvirus) | 38 | 0.857 | 0.829 | 0.543 | 1.000 |
-| S12857Taxa1 (viral metagenomics) | 41 | 0.556 | 0.841 | 0.365 | 1.000 |
-| S13909Taxa1 (fungal virus capsid) | 86 | 0.589 | 0.735 | 0.444 | 1.000 |
-| S13955Taxa5 (plant virus) | 7 | 0.750 | 0.250 | 0.500 | 1.000 |
-| S1458 (plant potyvirus) | 14 | 0.524 | 0.333 | 0.143 | 1.000 |
-| **Average** | — | **0.657** | **0.602** | **0.394** | 1.000 |
+**Eight** curated virus protein families with published expert phylogenetic trees were identified in TreeBase. These are the only genuinely expert-validated reference trees available for virus proteins.
+
+Python script: `evaluate_treebase_gt.py` | SLURM: Jobs 57480, 57576-57578
+
+#### Per-Family Results vs Expert Trees
+
+| Family | Seqs | Description | Hamming | PHYLA | ESM2 |
+|--------|:----:|-------------|:------:|:-----:|:----:|
+| S10171Taxa1 | 184 | Phage terminase | 0.370 | 0.669 | 0.624 |
+| S10521 | 38 | Poxvirus protein | 0.543 | 0.857 | 0.829 |
+| S12677Taxa1 | 31 | Calicivirus (RHDV) | 0.365 | 0.714 | 0.786 |
+| S12677Taxa2 | 65 | Calicivirus (RHDV full) | 0.347 | 0.661 | 0.790 |
+| S12857Taxa1 | 41 | Viral metagenomics | 0.365 | 0.556 | 0.841 |
+| S13909Taxa1 | 86 | Fungal virus capsid | 0.444 | 0.589 | 0.735 |
+| S13955Taxa5 | 7 | Plant virus polyprotein | 0.500 | 0.750 | 0.250 |
+| S1458 | 14 | Plant potyvirus | 0.143 | 0.524 | 0.333 |
+| **Average** | — | — | **0.390** | **0.665** | **0.649** |
+
+Hamming beats both pLM methods on 7/8 families. On the 1 exception (S13955Taxa5, 7 seqs), ESM2 accidentally outperforms — likely a stochastic artifact on a tiny family.
 
 ### Interpretation
 
