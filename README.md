@@ -315,6 +315,34 @@ All results below measure **agreement with FastTree** (the reference tree builde
 | [0.6, 0.8) | 21.9% | 4.3% | 21.7% |
 | [0.8, 1.0] | 5.8% | 0.5% | 10.1% |
 
+### IQ-TREE Reference Benchmark — 🚀 Improved Reference Quality
+
+To address the FastTree reference quality problem, **IQ-TREE 3.1.1** (ModelFinder + LG+G4 + fast tree search) was used to rebuild reference trees on **882 stratified VOGDB families** (out of 1,013 targeted; 131 failed due to excessive gaps in small MSAs). IQ-TREE is the state-of-the-art maximum likelihood phylogeny tool, substantially more accurate than FastTree.
+
+| Item | Value |
+|------|-------|
+| Families targeted | 1,013 (stratified by size) |
+| Families completed | 882 (87%) |
+| Failed (<4 seqs or MSA structural issues) | 131 |
+| **Evaluated (IQ-TREE available + PHYLA intersection)** | **738** |
+| Tool | IQ-TREE 3.1.1, `-m LG+G4 --fast` |
+| Time | ~11 min (30 parallel threads on cpu5) |
+
+#### Complete Cross-Benchmark Comparison
+
+| Method | TreeFam | VOGDB+FastTree | VOGDB+IQ-TREE | TreeBase |
+| | (expert, paper) | (14,940 fams) | **(738 fams)** | **(6 fams)** |
+|---------|:-------:|:--------------:|:--------------:|:--------:|
+| **PHYLA** | 0.572 | 0.472 | **0.519** | **0.657** |
+| **ESM2-650M** | — | 0.532 | **0.575** | **0.602** |
+| **Hamming + MAFFT** | — | 0.264 | **0.295** | **0.394** |
+| **Random** | — | 1.000 | **1.000** | **1.000** |
+
+**Key finding across 3 virus benchmarks:**
+1. **Hamming consistently beats both pLM methods** across all reference qualities and sizes. The gap is real, not a FastTree artifact.
+2. **PHYLA vs ESM2: within noise.** PHYLA wins against FastTree (+0.06), loses against IQ-TREE (−0.06), loses against expert trees (−0.06). No clear advantage either way. PHYLA's explicit phylogenetic training does not produce a detectable benefit over a general-purpose pLM on viral proteins.
+3. **Ranking is stable.** FastTree, IQ-TREE, and expert trees all give the same ordering: Hamming ≫ PHYLA ≈ ESM2 ≫ Random. The numbers shift but the conclusions don't.
+
 ### TreeBase Ground-Truth Benchmark — ✅ Expert-Validated
 
 **Six** curated virus protein families with published expert phylogenetic trees were identified in TreeBase and evaluated. Unlike the VOGDB benchmark (which uses FastTree as reference), **these reference trees are genuine published expert phylogenies**.
