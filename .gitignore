@@ -40,3 +40,6 @@ Thumbs.db
 # VOGDB 病毒评估数据（离线下载）
 Phyla/virus_data/
 Phyla/virus_data/
+
+*.err
+*.out

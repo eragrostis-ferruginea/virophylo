@@ -2,12 +2,12 @@
 #SBATCH --job-name=iqtree_ref
 #SBATCH --output=/home/jianpinhe3/virophylo/Phyla/slurm_logs/iqtree_ref_%A_%a.out
 #SBATCH --error=/home/jianpinhe3/virophylo/Phyla/slurm_logs/iqtree_ref_%A_%a.err
-#SBATCH --time=04:00:00
+#SBATCH --time=01:00:00
 #SBATCH --nodes=1
 #SBATCH --ntasks=1
-#SBATCH --cpus-per-task=4
+#SBATCH --cpus-per-task=1
 #SBATCH --partition=cpu1
-#SBATCH --array=1-1013%40
+#SBATCH --array=1-1013
 
 SCRIPT_DIR="/home/jianpinhe3/virophylo/Phyla"
 cd "$SCRIPT_DIR"
@@ -26,8 +26,7 @@ echo "Date: $(date)"
 python run_iqtree_single.py \
     --fam "$FAM" \
     --msa-dir virus_data/msa \
-    --output-dir virus_data/iqtree_trees \
-    --threads 4
+    --output-dir virus_data/iqtree_trees
 
 RC=$?
 echo "Exit code: $RC"

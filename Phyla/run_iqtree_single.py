@@ -40,27 +40,20 @@ def main():
     with open(msa_path) as f:
         n_seqs = sum(1 for line in f if line.startswith('>'))
 
-    # Run IQ-TREE
-    # Use ModelFinder + fast tree search (-fast) for speed
-    # -m MFP: ModelFinder Plus with tree search
-    # -bb 1000: ultrafast bootstrap 1000
-    # -nt: threads
-    # -pre: prefix for all output files
-    # --quiet: minimal stdout output
+    # Run IQ-TREE: LG+G4 (skip model testing), 1 thread per task
     prefix = os.path.join(out_dir, args.fam)
-    # `--fast` conflicts with `-bb`, so skip bootstrap since we only need ML tree
     cmd = [
         'iqtree', '-s', msa_path,
-        '-m', 'MFP',
+        '-m', 'LG+G4',
         '--fast',
-        '-nt', str(args.threads),
+        '-nt', '1',
         '-pre', prefix,
         '--quiet'
     ]
 
     t0 = time.time()
     try:
-        result = subprocess.run(cmd, capture_output=True, text=True, timeout=7200)
+        result = subprocess.run(cmd, capture_output=True, text=True, timeout=3600)
         elapsed = time.time() - t0
 
         if result.returncode != 0:
