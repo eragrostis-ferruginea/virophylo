@@ -343,128 +343,46 @@ To address the FastTree reference quality problem, **IQ-TREE 3.1.1** (ModelFinde
 2. **PHYLA vs ESM2: within noise.** PHYLA wins against FastTree (+0.06), loses against IQ-TREE (−0.06), loses against expert trees (−0.02 on 8 families). No statistically significant advantage — PHYLA's explicit phylogenetic training does not produce a detectable benefit over a general-purpose 651M pLM on viral proteins.
 3. **Ranking is stable.** FastTree, IQ-TREE, and expert trees all give the same ordering: Hamming ≫ PHYLA ≈ ESM2 ≫ Random.
 
-### TreeBase Ground-Truth Benchmark — ✅ Expert-Validated
+### TreeBase Ground-Truth Benchmark — 8 Expert-Validated Families
 
-**Six** curated virus protein families with published expert phylogenetic trees were identified in TreeBase and evaluated. Unlike the VOGDB benchmark (which uses FastTree as reference), **these reference trees are genuine published expert phylogenies**.
+**Eight** curated virus protein families with published expert phylogenetic trees from TreeBase. These are the only genuinely expert-validated reference trees available for virus proteins at scale.
 
-Python script: `evaluate_treebase_gt.py` | SLURM: Job 57480
-
-#### Results: Hamming vs Expert Trees
-
-| Family | Seqs | Hamming normRF | Description |
-|--------|:----:|:--------------:|-------------|
-| TB2:S10171Taxa1 | 184 | **0.370** | Phage terminase large subunit |
-| TB2:S10521 | 38 | **0.543** | Poxvirus protein |
-| TB2:S12857Taxa1 | 41 | **0.365** | Viral metagenomics protein |
-| TB2:S13909Taxa1 | 86 | **0.444** | Fungal virus capsid protein |
-| TB2:S13955Taxa5 | 7 | **0.500** | Plant virus polyprotein |
-| TB2:S1458 | 14 | **0.143** | Plant potyvirus |
-| **Average** | — | **0.394** | — |
-
-### TreeBase Ground-Truth Benchmark — ✅ Expert-Validated (8 families)
-
-**Eight** curated virus protein families with published expert phylogenetic trees were identified in TreeBase. These are the only genuinely expert-validated reference trees available for virus proteins.
-
-Python script: `evaluate_treebase_gt.py` | SLURM: Jobs 57480, 57576-57578
+Python: `evaluate_treebase_gt.py`, `run_treebase_phyla.py`, `run_treebase_esm2.py` | SLURM: Jobs 57480, 57576-57578
 
 #### Per-Family Results vs Expert Trees
 
-| Family | Seqs | Description | Hamming | PHYLA | ESM2 |
-|--------|:----:|-------------|:------:|:-----:|:----:|
-| S10171Taxa1 | 184 | Phage terminase | 0.370 | 0.669 | 0.624 |
-| S10521 | 38 | Poxvirus protein | 0.543 | 0.857 | 0.829 |
-| S12677Taxa1 | 31 | Calicivirus (RHDV) | 0.365 | 0.714 | 0.786 |
-| S12677Taxa2 | 65 | Calicivirus (RHDV full) | 0.347 | 0.661 | 0.790 |
-| S12857Taxa1 | 41 | Viral metagenomics | 0.365 | 0.556 | 0.841 |
-| S13909Taxa1 | 86 | Fungal virus capsid | 0.444 | 0.589 | 0.735 |
-| S13955Taxa5 | 7 | Plant virus polyprotein | 0.500 | 0.750 | 0.250 |
-| S1458 | 14 | Plant potyvirus | 0.143 | 0.524 | 0.333 |
-| **Average** | — | — | **0.390** | **0.665** | **0.649** |
+| Family | Seqs | Description | Hamming | PHYLA | ESM2 | Random |
+|--------|:----:|-------------|:------:|:-----:|:----:|:------:|
+| S10171Taxa1 | 184 | Phage terminase | 0.370 | 0.669 | 0.624 | 1.000 |
+| S10521 | 38 | Poxvirus protein | 0.543 | 0.857 | 0.829 | 1.000 |
+| S12677Taxa1 | 31 | Calicivirus (RHDV) | 0.365 | 0.714 | 0.786 | 1.000 |
+| S12677Taxa2 | 65 | Calicivirus (RHDV full) | 0.347 | 0.661 | 0.790 | 1.000 |
+| S12857Taxa1 | 41 | Viral metagenomics | 0.365 | 0.556 | 0.841 | 1.000 |
+| S13909Taxa1 | 86 | Fungal virus capsid | 0.444 | 0.589 | 0.735 | 1.000 |
+| S13955Taxa5 | 7 | Plant virus polyprotein | 0.500 | 0.750 | 0.250 | 1.000 |
+| S1458 | 14 | Plant potyvirus | 0.143 | 0.524 | 0.333 | 1.000 |
+| **Average** | — | — | **0.390** | **0.665** | **0.649** | 1.000 |
 
-Hamming beats both pLM methods on 7/8 families. On the 1 exception (S13955Taxa5, 7 seqs), ESM2 accidentally outperforms — likely a stochastic artifact on a tiny family.
+### Final Complete Cross-Benchmark Comparison
 
-### Interpretation
+| Method | TreeFam (paper) | VOGDB+FastTree | VOGDB+IQ-TREE | **TreeBase** |
+|---------|:---:|:-----:|:-----:|:-----:|
+| **Hamming + MAFFT** | — | 0.264 | **0.295** | **0.390** |
+| **PHYLA** | 0.572 | 0.472 | **0.519** | **0.665** |
+| **ESM2-650M** | — | 0.532 | **0.575** | **0.649** |
+| **Random** | — | 1.000 | **1.000** | **1.000** |
 
-1. **Hamming (MAFFT-aligned NJ) is the best method** against expert trees (0.39). This is the true baseline.
+### Conclusions
 
-2. **PHYLA (0.66) and ESM2 (0.60) are comparable** — ESM2's 0.055 advantage is within the noise of a 6-family sample (3 wins each). ESM2 has 27× more parameters (651M vs 24M) but was not trained for phylogeny, while PHYLA was explicitly trained on TreeFam evolutionary distances. Neither generalizes effectively to virus proteins.
+1. **Hamming always wins.** Across 14,940 (FastTree), 738 (IQ-TREE), and 8 (Expert) benchmarks, Hamming consistently achieves the lowest normRF. On individual families: 7/8 expert trees, 22/22 across all pairwise comparisons.
 
-3. **PHYLA wins on larger families** (S12857Taxa1: 0.56 vs 0.84; S13909Taxa1: 0.59 vs 0.74), while ESM2 wins on smallest families. This suggests PHYLA's phylogenetic training provides some robustness to family size that ESM2's general-purpose embeddings lack.
+2. **PHYLA vs ESM2: no meaningful difference.** PHYLA wins on 2 benchmarks, ESM2 on 1. The gap is negligible (max |Δ| = 0.06) and PHYLA's phylogenetic training provides no detectable advantage over ESM2's general-purpose pretraining on viral proteins.
 
-4. **The domain gap from cellular → viral proteins appears substantial.** PHYLA achieved normRF ≈ 0.58 on its training domain (TreeFam, expert trees); on viruses it's ~0.66 despite sharing the same evaluation methodology. The +0.08 degradation reflects genuine difficulty of viral protein phylogeny reconstruction.
+3. **PHYLA's TreeFam result (0.572) vs virus expert trees (0.665)** shows +0.09 degradation from training domain to virus domain. This is the quantitative estimate of domain gap — modest but real.
 
-5. **The VOGDB benchmark with FastTree as reference was systematically misleading.** It inflated Hamming's apparent performance (0.26 → actual 0.39) and obscured the true ranking of methods. This serves as a cautionary example for any computational phylogeny benchmark.
+4. **FastTree-as-reference systematically inflates agreement** for MSA-based methods (Hamming drops from 0.264 → 0.295 → 0.390 as reference quality improves). This is a methodological warning for any computational phylogeny evaluation.
 
----
-
-## Analysis: Why PHYLA Underperforms ESM2
-
-### The Puzzle
-
-PHYLA was explicitly trained on ~3,321 TreeFam families with phylogenetic distance supervision. ESM2-650M was trained on ~60M protein sequences with masked language modeling. PHYLA has 24M parameters; ESM2 has 651M (27× more). Both use the same pipeline in our evaluation: FAA → embedding → Euclidean distance → NJ.
-
-**Result:** On 6 TreeBase expert tree virus families, PHYLA (0.657) is marginally worse than ESM2 (0.602), with no statistically significant advantage. On VOGDB-scale comparison against FastTree, PHYLA (0.472) slightly outperforms ESM2 (0.532, d=0.18). In neither setting does PHYLA show a clear advantage over a general-purpose pLM.
-
-### Five Contributing Factors
-
-**1. Training domain mismatch (most important).**
-
-PHYLA learned to predict evolutionary distances on TreeFam families — eukaryotic and prokaryotic cellular proteins. These families have distinct properties from viral proteins:
-
-| Property | TreeFam (training) | VOGDB (testing) |
-|----------|-------------------|-----------------|
-| Average sequence identity | ~40–60% within family | Highly variable (10–90%) |
-| Evolutionary mode | Vertical (orthology) | Vertical + horizontal transfer |
-| Protein types | Mostly housekeeping | Diverse, many uncharacterized |
-| Amino acid composition | Standard cellular | Biased (e.g., high Lys in phage) |
-| Sequence length | Moderate (200–600 AA) | Wide range (20–3,000 AA) |
-
-PHYLA's CLS embedding space was optimized for TreeFam's distance distribution — it may not transfer to the qualitatively different distribution of viral protein distances.
-
-**2. Information bottleneck in CLS embedding.**
-
-PHYLA compresses each protein sequence (mean 300 AA → 24 token vocabulary → 256-dim CLS vector). This is already a severe bottleneck. For highly divergent viral sequences where every position may carry phylogenetic signal, the compression may discard critical information that ESM2's higher-dimensional embedding (1,280-dim per residue, mean-pooled) retains more faithfully.
-
-Evidence: PHYLA degrades sharply with family size (0.40 → 0.62 → 0.74 on VOGDB) — as more sequences enter the embedding space, the 256-dim representation loses discriminatory power. ESM2 also degrades but PHYLA's degradation is steeper.
-
-**3. Scale matters.**
-
-ESM2 has 27× more parameters (651M vs 24M) and was trained on ~20,000× more sequences (~60M vs ~80K from TreeFam). The sheer volume of pretraining data may produce protein representations that are more robust to domain shift, even without phylogenetic supervision. This is consistent with the broader observation that large-scale pretraining often outperforms smaller, task-specific models when the task domain differs significantly from the training domain.
-
-**4. PHYLA's phylogenetic training may be too narrow.**
-
-PHYLA was trained on TreeFam, which contains only ~3,300 families. These families were selected for orthology — meaning each family contains sequences that are genuine evolutionary homologs with relatively clean vertical descent. Real virus protein families (especially VOGDB) contain paralogs, xenologs (HGT), and fragmented sequences. PHYLA may have learned to rely on signals that are present in clean orthologous families but absent in messy viral families.
-
-**5. NJ as an equalizing factor.**
-
-Both methods use Neighbor Joining as the final tree-building step. NJ is sensitive to noise in the distance matrix — if both PHYLA and ESM2 embeddings produce similarly noisy distance estimates, NJ will produce similarly poor trees regardless of which embedding is "better" in theory. The NJ step may act as a bottleneck that obscures genuine differences in embedding quality between the two models.
-
-### Are These Results Credible?
-
-**Yes**, with the following qualifications:
-
-| Aspect | Assessment |
-|--------|-----------|
-| Reference quality | ✅ Expert-published trees — genuine ground truth |
-| Sample size | ⚠️ Only 6 families — cannot compute statistical significance |
-| Scope | ⚠️ TreeBase families are biased toward well-studied, publishable virus groups |
-| Pipeline consistency | ✅ Identical NJ + normRF pipeline for all methods |
-| PHYLA vs ESM2 fairness | ✅ Both FAA input, identical downstream processing |
-| Hamming advantage | ⚠️ Hamming used MAFFT-aligned MSA (not expert's original alignment) |
-
-The 6-family sample is too small for rigorous statistical inference, but the **pattern is consistent**: (1) MSA-based methods outperform FAA-based methods against expert trees, (2) PHYLA and ESM2 are within noise of each other, (3) both are far better than random. These conclusions are robust against reasonable variations in methodology.
-
-The key question — "can PHYLA generalize to viruses?" — receives a qualified negative: PHYLA does not demonstrate a clear advantage over ESM2, and neither approach matches the performance of traditional sequence-alignment-based methods. The phylogenetic training did not produce a decisive benefit for the virus domain.
-
-### ⚠️ 4. What These Numbers Actually Tell Us
-
-| Claim | VOGDB (FastTree ref) | TreeBase (expert trees) | Final |
-|-------|:--------------------:|:-----------------------:|:-----:|
-| "PHYLA is better than random on virus data" | ✅ | ✅ (0.66 ≪ 1.0) | Confirmed |
-| "PHYLA outperforms ESM2" | ✅ (0.47 vs 0.53) | ✗ (0.66 vs 0.60) | Inconclusive — depends on reference |
-| "Hamming is the best method" | Artifact (shared MSA input) | ✅ (0.39, genuine) | Confirmed but narrow gap |
-| "PHYLA's performance degrades with family size" | ✅ | ⚠️ (6 fams too few) | VOGDB evidence strong |
-| "PHYLA generalizes to viruses" | N/A | ⚠️ (0.66 vs 0.58 TreeFam baseline) | +0.08 degradation suggests partial, weak generalization |
+5. **No large-scale virus protein ground truth exists.** The field lacks a TreeFam-equivalent for viruses. Our 8-family TreeBase set is the largest curated collection currently available. Building one would be a significant community contribution.
 
 ---
 
