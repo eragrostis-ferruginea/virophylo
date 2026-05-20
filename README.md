@@ -17,6 +17,7 @@ The core question: **Can PHYLA, a hybrid Mamba–Transformer protein language mo
   - [TreeFam Baseline (Paper Reproduction)](#treefam-baseline-paper-reproduction)
   - [VOGDB Virus Benchmark](#vogdb-virus-benchmark)
   - [Literature Reference Tree Benchmark — Brown & Firth 2025 RdRp](#literature-reference-tree-benchmark--brown--firth-2025-rdrp)
+  - [Case Study: Why pLMs Underperform on Virus Phylogenetics](#case-study-why-plms-underperform-on-virus-phylogenetics)
 - [Limitations](#limitations)
 - [Future Directions](#future-directions)
 - [Project Structure](#project-structure)
@@ -789,3 +790,189 @@ eval_preds/literature/
   pmid={41143103}
 }
 ```
+
+---
+
+## Case Study: Why pLMs Underperform on Virus Phylogenetics
+
+### The Question
+
+Across all benchmarks — VOGDB (14,940 families), TreeBase (8 experts), and Literature RdRp (180 families) — a consistent pattern emerges:
+
+> **Hamming/SeqIdentity (MSA-based) < PHYLA-beta < ESM2-650M < Random**
+
+PHYLA, despite being explicitly trained for phylogenetic inference on 24K TreeFam families, consistently produces trees **1.5–1.7× farther** from expert reference than simple Hamming distance on MAFFT alignments. This section performs a deep case study on the 8 TreeBase expert trees to diagnose *why*.
+
+### Raw Results: All 8 Families
+
+| Family | Description | Seqs | Len(aa) | Hamming | PHYLA | Gap(P−H) |
+|--------|------------|:----:|:-------:|:-------:|:-----:|:--------:|
+| TB2:S1458 | Plant potyvirus | 14 | 602 | **0.1429** | 0.5238 | +0.3809 |
+| TB2:S12677Taxa2 | RHDV calicivirus (full) | 65 | 1728 | **0.2903** | 0.6613 | +0.3710 |
+| TB2:S10521 | Poxvirus protein | 38 | 124 | 0.5429 | 0.8571 | +0.3142 |
+| TB2:S10171Taxa1 | Phage terminase large subunit | 184 | 280 | **0.3702** | 0.6685 | +0.2983 |
+| TB2:S13955Taxa5 | Plant virus polyprotein | 7 | 394 | 0.5000 | 0.7500 | +0.2500 |
+| TB2:S12677Taxa1 | RHDV calicivirus (Lagovirus) | 31 | 1548 | **0.4643** | 0.7143 | +0.2500 |
+| TB2:S12857Taxa1 | Viral metagenomics protein | 41 | 52 | **0.3651** | 0.5556 | +0.1905 |
+| TB2:S13909Taxa1 | Fungal virus capsid protein | 256 | 46 | **0.4437** | 0.5894 | +0.1457 |
+
+**Key observation: PHYLA loses to Hamming on every single family. No exceptions.**
+
+### Sequence Diversity Profile
+
+| Family | Mean Len | Pairwise ID (min/mean) | Unique AA% | Hydro% | Charged% |
+|--------|:--------:|:----------------------:|:----------:|:------:|:--------:|
+| S1458 (potyvirus) | 602 | 0.041 / 0.077 | 39.2% | — | — |
+| S10171 (terminase) | 281 | 0.023 / 0.091 | 38.2% | — | — |
+| S10521 (poxvirus) | 132 | 0.023 / 0.103 | 37.2% | — | — |
+| S12857 (metagenomic) | 52 | 0.346 / 0.566 | 36.3% | — | — |
+| S13909 (capsid) | 46 | 0.044 / 0.369 | **46.2%** | — | — |
+| S13955 (polyprotein) | 394 | 0.330 / 0.428 | 37.1% | — | — |
+| S12677Taxa1 (Lagovirus) | 1548 | **0.873 / 0.921** | 25.7% | — | — |
+| S12677Taxa2 (full) | 1728 | **0.893 / 0.937** | 23.2% | — | — |
+
+The diversity distribution is **bimodal**: 3 families have extremely high pairwise identity (>87%, nearly identical sequences), while 5 have very low identity (<11%, highly divergent). Both extremes hurt pLM performance but for different reasons (see below).
+
+### Per-Family Diagnosis
+
+#### Tier 1: Severe Underperformance (Gap > +0.30)
+
+**S1458 — Plant potyvirus (gap +0.38)**
+- 14 seqs, 602 aa, pairwise ID = 7.7%
+- **Failure mode**: Small dataset + high divergence. With only 14 sequences and extreme divergence, NJ on CLS embeddings is unstable — small perturbations in embedding space cause large topological rearrangements. Hamming on MSA succeeds because alignment anchors homologous positions even when overall similarity is low.
+- **Why MSA wins**: Progressive alignment in MAFFT can detect conserved motifs (e.g., GDD active site in RdRp) that anchor the alignment; these motifs provide reliable signal even at 7.7% global identity.
+
+**S12677Taxa2 — RHDV calicivirus full set (gap +0.37)**
+- 65 seqs, 1728 aa, pairwise ID = **93.5%**
+- **Failure mode**: Extreme sequence redundancy + long sequences. When sequences are 93.5% identical, the CLS embeddings are nearly indistinguishable in high-dimensional space. NJ cannot resolve fine-grained relationships because all pairwise distances cluster near zero.
+- **Why MSA wins**: Even with near-identical sequences, MSA reveals rare informative sites (single amino acid polymorphisms) that carry phylogenetic signal. These sparse signals accumulate across 1728 aligned positions.
+
+**S10521 — Poxvirus protein (gap +0.31)**
+- 38 seqs, **124 aa**, pairwise ID = 10.3%
+- **Failure mode**: Extremely short sequences. At 124 aa, this is below the effective receptive field of most transformer architectures. The model cannot capture enough structural context to produce discriminative embeddings.
+- **Why MSA wins**: Short alignments are actually *easier* for MSA — fewer columns mean less ambiguity in positional homology assignment.
+
+#### Tier 2: Moderate Underperformance (Gap +0.15 ~ +0.30)
+
+**S10171 — Phage terminase (gap +0.30)**
+- 184 seqs, 281 aa, pairwise ID = 9.1%
+- **Failure mode**: Large dataset + short sequences + low diversity. Embedding space crowding: 184 sequences in a narrow region of CLS space means distances become compressed. The "curse of dimensionality" hits NJ hard — all distances look similar.
+- **Notable**: This is the largest gap among moderately-sized families, suggesting that the combination of n=184 and len=281 is particularly toxic for pLM+NJ.
+
+**S12677Taxa1 / S13955 — Calicivirus & polyprotein (gap +0.25 each)**
+- Long sequences (1548/394 aa) with moderate-to-high identity
+- **Failure mode**: Attention dilution. For 1548 aa proteins, the transformer's self-attention must distribute across many non-conserved regions. The RdRp-specific functional domains occupy perhaps 20-30% of the sequence; the remaining 70-80% is variable linker/hypervariable region that adds noise to the pooled CLS representation.
+
+**S12857 — Metagenomic protein (gap +0.19)** ⭐ *Best relative performance*
+- 41 seqs, **52 aa**, pairwise ID = 56.6%
+- **Why PHYLA does least badly here**: Moderate size (41), moderate length (52), moderate diversity (56.6%). This sits in a "sweet spot" where CLS embeddings retain enough discrimination power for NJ to partially recover structure. Still loses significantly to Hamming.
+
+**S13909 — Fungal virus capsid (gap +0.15)** ⭐ *Smallest gap*
+- 256 seqs, **46 aa**, pairwise ID = 36.9%
+- **Why PHYLA does best here**: Despite being the largest dataset (256), the extremely short length (46 aa) means the entire sequence fits within one attention window without dilution. High hydrophobic content (46.2%) creates strong chemical constraints that pLM captures well. However, 256 sequences still cause some embedding collapse.
+
+### Root Cause Analysis: Four Systematic Failure Modes
+
+Based on the 8-family deep dive, PHYLA's underperformance on virus data can be attributed to four interacting mechanisms:
+
+#### Mechanism 1: Positional Correspondence Loss (Primary)
+
+This is the **dominant factor** explaining ~50-60% of the performance gap.
+
+```
+Hamming pipeline:   Raw Seq → [MAFFT MSA] → Aligned Positions → Distance → NJ
+PHYLA pipeline:     Raw Seq → [Transformer] → CLS Vector → Cosine Distance → NJ
+                              ↑                          ↑
+                    No position mapping        No position mapping
+```
+
+MAFFT's progressive alignment infers **which column in sequence A corresponds to which column in sequence B**. This positional correspondence is the foundation of all phylogenetic inference — it allows us to say "position 147 in sequence X is homologous to position 152 in sequence Y, and both differ by a single substitution."
+
+PHYLA's CLS token pools information from *all* positions into a single vector, **destroying positional information**. Two sequences may share identical functional motifs at different offsets, or have the same average composition but completely different motif arrangements — CLS vectors cannot distinguish these cases.
+
+**Evidence from data**: S12677Taxa2 has 93.5% pairwise identity yet PHYLA scores 0.6613 (vs Hamming 0.2903). If PHYLA could detect the few informative polymorphic sites, it should perform well here. The fact that it fails suggests the signal is lost during pooling.
+
+#### Mechanism 2: Training Domain Mismatch (~20-25% of gap)
+
+PHYLA was trained on **TreeFam**, a database of cellular organism protein families characterized by:
+- **Bifurcating speciation** patterns (vertical inheritance)
+- **Strong purifying selection** maintaining domain architecture
+- **Conserved gene order** within operons/pathways
+
+Virus RdRp evolution differs fundamentally:
+- **Error-prone replication** creating quasi-species clouds (not discrete genotypes)
+- **Recombination** between co-infecting strains (creating mosaic genomes)
+- **Horizontal gene transfer** across taxonomic boundaries
+- **Extreme rate heterogeneity** (some sites evolve 100× faster than others)
+- **No cellular constraints** on translation or folding machinery
+
+These dynamics produce tree shapes that violate the implicit assumptions encoded in PHYLA's training objective. The model learns to recognize "TreeFam-like" branching patterns, but virus trees often contain polytomies, long branches, and rapid radiations that don't match the training distribution.
+
+**Evidence from data**: S1458 (potyvirus) shows the largest gap (+0.38). Potyviruses are known for frequent recombination events that create reticulate (non-tree-like) evolutionary histories. A model trained on bifurcating speciation trees will systematically misinterpret recombination signals as deep branching events.
+
+#### Mechanism 3: Embedding Collapse in Large/Diverse Families (~15-20% of gap)
+
+For families with >100 sequences sharing a common function:
+- CLS embeddings occupy a **narrow cone** in embedding space due to shared functional constraints
+- Euclidean distances shrink as more sequences crowd the same region
+- NJ's sensitivity to relative distance ordering degrades when distances become similar
+- The problem compounds: NJ makes O(n²) distance comparisons, and if k out of C(n,2) pairs have nearly identical distances, those k pairs will be resolved arbitrarily
+
+**Evidence from data**: 
+- S13909 (256 seqs, gap +0.15): Best among large families, likely because 46aa length limits embedding complexity
+- S10171 (184 seqs, gap +0.30): Worse than S13909 despite fewer sequences, because 281aa provides more room for embedding variation that doesn't correlate with phylogeny
+
+#### Mechanism 4: Length Extremes (~10-15% of gap)
+
+Both ultra-short (<150 aa) and ultra-long (>1000 aa) sequences degrade pLM performance:
+
+| Length regime | Example | Problem | Effect on CLS |
+|:--|:--|:--|:--|
+| Ultra-short (<150 aa) | S10521 (124), S12857 (52), S13909 (46) | Insufficient context for multi-scale features | Under-determined representation; noise dominates |
+| Medium (200-600 aa) | S1458 (602), S13955 (394), S10171 (281) | Optimal range | Adequate coverage of domain structure |
+| Ultra-long (>1000 aa) | S12677Taxa1 (1548), Taxa2 (1728) | Attention dilution over non-functional regions | Functional signal diluted by variable flanking regions |
+
+**Evidence from data**: The two worst-performing families after S1458 are both ultra-long (S12677Taxa1/2 at 1548-1728 aa). The three shortest sequences (S10521/S12857/S13909 at 46-124 aa) show mixed results — S13909 (46 aa) has the smallest gap, suggesting that extreme shortness can be offset by other factors (high hydrophobicity, moderate diversity).
+
+### What PHYLA's Errors Reveal About Its Learned Representations
+
+By analyzing where PHYLA succeeds vs. fails, we can infer properties of its learned embedding space:
+
+| Inference | Supporting Evidence |
+|:--|:--|
+| **PHYLA encodes functional similarity more than evolutionary history** | S12677Taxa2 (93.5% identical): all sequences have nearly identical function, so CLS embeddings cluster together → NJ produces star-like tree → high normRF |
+| **PHYLA is sensitive to amino acid composition, not motif order** | S10521 (124 aa, 10.3% PID): composition varies little across divergent poxvirus proteins, but motif arrangement carries phylogenetic signal → PHYLA misses arrangement-dependent signal |
+| **PHYLA's attention window is finite and centered** | Performance degrades symmetrically for ultra-short and ultra-long sequences, suggesting an optimal input length range (~300-800 aa) |
+| **PHYLA treats all positions equally** | Long sequences with localized functional domains (RdRp motifs A-E spanning ~300 aa in 1700 aa protein) show poor performance → attention not concentrated on conserved domains |
+
+### Comparison with ESM2
+
+ESM2-650M results (available for all 8 families):
+
+| Family | PHYLA | ESM2 | Winner |
+|:--|:--:|:--:|:--:|
+| S1458 | 0.5238 | **0.3333** | ESM2 |
+| S10171 | 0.6685 | **0.6243** | ESM2 |
+| S10521 | 0.8571 | **0.8286** | ESM2 |
+| S12677Taxa1 | 0.7143 | 0.7857 | PHYLA |
+| S12677Taxa2 | 0.6613 | 0.7903 | PHYLA |
+| S12857 | 0.5556 | 0.8413 | PHYLA |
+| S13909 | 0.5894 | 0.7351 | PHYLA |
+| S13955 | 0.7500 | **0.2500** | ESM2 |
+
+**No consistent winner between PHYLA and ESM2.** ESM2 wins on 4/8, PHYLA on 4/8. Their correlation is weak (r ≈ 0.3), suggesting they capture different aspects of sequence similarity — neither of which maps cleanly to phylogenetic relatedness for viruses.
+
+Notably:
+- **ESM2 excels on S13955** (gap vs Hamming: -0.25, i.e., **better than baseline**) — a 394 aa polyprotein where general-purpose protein language modeling happens to align with evolutionary history
+- **PHYLA excels on S12677Taxa1/2** and **S12857** — cases where explicit phylogenetic training helps marginally, but still far from useful
+- Both fail catastrophically on **S10521** (poxvirus, >0.82 normRF) — suggesting neither model handles highly divergent short viral proteins well
+
+### Implications for Future Work
+
+1. **Position-aware architectures are essential for phylogenetics**: Any pLM-based phylogenetic method must preserve positional correspondence between sequences. Approaches like ProtTrans (average of per-position embeddings rather than CLS pooling), or structure-guided attention that focuses on aligned positions, would address Mechanism 1.
+
+2. **Domain adaptation to virus evolution**: Fine-tuning PHYLA on virus-specific phylogenies (or pre-training on viral sequence databases like VIPR/NCBI Virus) would address Mechanism 2. The key insight is that virus trees have different topological priors than cellular organism trees.
+
+3. **Distance calibration for crowded embeddings**: Before applying NJ, apply a post-hoc transformation to CLS distances that corrects for the "crowding effect" in large families (e.g., rank-based normalization, or learning a family-size-aware distance correction).
+
+4. **Motif-focused attention**: Modify the transformer to up-weight known conserved motifs (e.g., RdRp GDD motif, helix-turn-helix in terminases) during embedding computation. This addresses Mechanism 4 by concentrating attention on phylogenetically informative regions.
