@@ -16,6 +16,7 @@ The core question: **Can PHYLA, a hybrid Mamba–Transformer protein language mo
 - [Results](#results)
   - [TreeFam Baseline (Paper Reproduction)](#treefam-baseline-paper-reproduction)
   - [VOGDB Virus Benchmark](#vogdb-virus-benchmark)
+  - [Literature Reference Tree Benchmark — Brown & Firth 2025 RdRp](#literature-reference-tree-benchmark--brown--firth-2025-rdrp)
 - [Limitations](#limitations)
 - [Future Directions](#future-directions)
 - [Project Structure](#project-structure)
@@ -572,3 +573,219 @@ python compare_virus_trees.py \
 6. **ete3**: Huerta-Cepas, J. et al. (2016). *ETE 3: Reconstruction, Analysis, and Visualization of Phylogenomic Data*. Mol. Biol. Evol.
 
 7. **scikit-bio**: [https://scikit.bio/](https://scikit.bio/)
+
+---
+
+## Literature Reference Tree Benchmark — Brown & Firth 2025 RdRp
+
+### Overview
+
+This benchmark replaces the original 8 TreeBase expert trees with **303 OTU-level expert phylogenies** from Brown & Firth (2025), representing the largest curated virus protein reference tree collection available for evaluation. All metrics are computed on a **unified 180-family subset** (intersection of all 3 methods) to ensure fair comparison.
+
+| Item | Value |
+|------|-------|
+| Source | [Brown & Firth 2025](https://doi.org/10.1093/ve/veaf074), Zenodo |
+| Protein | RNA-dependent RNA polymerase (RdRp) |
+| Total OTU families | **303** |
+| Taxonomic orders | **26** (Picornavirales: 112, Cryppavirales: 23, Nodamuvirales: 19, ...) |
+| Sequences in dataset | **21,829** total (mean 72/family, max 675) |
+| Ref tree leaves | mean 170/tree, max 1,779 |
+| Families with ≥4 seqs | **282** |
+| Unified evaluable | **180** (intersection of all methods) |
+
+### Data Processing Pipeline
+
+The raw data from Brown & Firth consists of 311 Newick tree files (`.nwk`) with corresponding protein sequence files (`.tre.faa`). The processing pipeline ([final_pipeline.py](file:///home/jianpinhe3/virophylo/virus_data/literature_refs/final_pipeline.py)) performs:
+
+```
+Raw data (Zenodo)
+  ├── 311 × .nwk reference trees
+  └── 311 × .tre.faa sequence files
+        │
+        ▼
+  ┌─────────────────────────────────────────────┐
+  │ Stage 1: Leaf name → accession extraction   │
+  │   Format: "ACC\|Name\|Source:branch_len"     │
+  │   Handles: RefSeq (YP_/NP_/WP_), GenBank,    │
+  │            WGS (JAAOEH01...), Serratus/PalmDB│
+  │   Rejects: ND_ (non-NCBI identifiers)       │
+  └──────────────────┬──────────────────────────┘
+                     ▼
+  ┌─────────────────────────────────────────────┐
+  │ Stage 2: NCBI batch fetch (efetch API)      │
+  │   db=protein for standard accessions         │
+  │   db=nuccore for extended WGS contigs        │
+  │   Result: fetched_ncbi.faa (18,496 seqs)     │
+  └──────────────────┬──────────────────────────┘
+                     ▼
+  ┌─────────────────────────────────────────────┐
+  │ Stage 3: ST_1.tsv matching                 │
+  │   Organism name reverse index              │
+  │   Nearest-neighbor prefix matching          │
+  │   .tre.faa fallback for unmatched seqs      │
+  └──────────────────┬──────────────────────────┘
+                     ▼
+  ┌─────────────────────────────────────────────┐
+  │ Output: literature_dataset.pickle           │
+  │   312 entries (303 OTU + 9 metadata)        │
+  │   Each: {sequences: {acc: aa},             │
+  │           tree_newick: "..."}               │
+  └─────────────────────────────────────────────┘
+```
+
+#### Sequence source breakdown
+
+| Source | Count | Percentage |
+|--------|:-----:|:----------:|
+| ST_1.tsv Organism-matched / Other | 14,296 | 65.5% |
+| GenBank / WGS accessions | 4,024 | 18.4% |
+| NCBI RefSeq (YP_/NP_/WP_) | 3,445 | 15.8% |
+| Serratus / PalmDB | 64 | 0.3% |
+
+#### Key technical challenges resolved
+
+1. **Leaf name parsing**: Tree leaves use `ACCESSION|virus_name|source:branch_length` format. Accession extraction must handle version numbers (`YP_009328360.1` vs `YP_009328360`), extended WGS IDs (`JAAOEH0123456`), and non-standard identifiers.
+
+2. **NCBI fetch strategy**: Standard `db=protein` works for RefSeq/GenBank. Extended WGS contigs require `db=nuccore` with correct database parameter — using `db=protein` for these returns empty results.
+
+3. **Non-NCBI identifier handling**: Serratus/PalmDB (`u254328_nogb`) and Tara Contig sequences cannot be fetched from NCBI. Resolved via ST_1.tsv organism-name matching and nearest-neighbor prefix alignment.
+
+4. **Duplicate leaf names in reference trees**: Many Brown & Firth trees contain repeated leaf names (e.g., `KUM45503.1` appears multiple times). ete3's `prune()` raises `TreeError: Ambiguous node name` on duplicates. Fixed by switching to node-object-based pruning with Counter tracking.
+
+### Evaluation Scripts
+
+| Script | Method | SLURM | Hardware |
+|--------|--------|-------|----------|
+| [evaluate_literature_gt.py](file:///home/jianpinhe3/virophylo/Phyla/evaluate_literature_gt.py) | Hamming + NJ, SeqID + NJ, Random | [run_lit_baselines_slurm.sh](file:///home/jianpinhe3/virophylo/Phyla/run_lit_baselines_slurm.sh) | CPU (16 cores, 12h) |
+| [evaluate_literature_phyla.py](file:///home/jianpinhe3/virophylo/Phyla/evaluate_literature_phyla.py) | PHYLA-beta (24M) | [run_lit_phyla_slurm.sh](file:///home/jianpinhe3/virophylo/Phyla/run_lit_phyla_slurm.sh) | GPU (RTX 2080 Ti, 10GB, 4h) |
+| [evaluate_literature_esm2.py](file:///home/jianpinhe3/virophylo/Phyla/evaluate_literature_esm2.py) | ESM2-650M + NJ | [run_lit_esm2_slurm.sh](file:///home/jianpinhe3/virophylo/Phyla/run_lit_esm2_slurm.sh) | GPU (RTX 2080 Ti, 10GB, 4h) |
+
+#### Evaluation flow (per family)
+
+```
+For each of 303 OTU families:
+  1. Load sequences + reference Newick tree from pickle
+  2. Extract reference leaf names (Bio.Phylo)
+  3. Fuzzy-match dataset keys to tree leaves (4-layer strategy):
+     a) Exact match
+     b) Dataset key is prefix of leaf ("ACC" matches "ACC|Name|...")
+     c) Key without version matches leaf base ("ACC" matches "ACC.1|...")
+     d) Substring match on first pipe-separated field
+  4. Prune reference tree to matched leaves (ete3, duplicate-aware)
+  5a. Baseline: MAFFT MSA → distance matrix → NJ tree
+      - >200 seqs: --parttree --thread 1
+      - >50 seqs: --retree 1 --maxiterate 2 --thread 1
+      - else: --auto
+  5b. PHYLA: encode → CLS embeddings → NJ reconstruction
+  5c. ESM2: embed → cosine distance → NJ tree
+  6. Rename prediction leaves to match reference naming
+  7. Compute normRF (unrooted Robinson-Foulds, topology-only)
+```
+
+### Results
+
+All metrics below are computed on the **same 180 families** (the intersection where all three methods produced valid results).
+
+| Method | n | Avg normRF | Median | Perfect% (RF=0) | Worst% (≥0.98) |
+|--------|---|-----------|--------|:----------------:|:--------------:|
+| **Hamming + MAFFT + NJ** | 180 | **0.5382** | 0.5455 | 8.9% | 6.1% |
+| **SeqIdentity + MAFFT + NJ** | 180 | 0.5444 | 0.5606 | 8.3% | 6.7% |
+| **Random tree** | 180 | 1.0000 | 1.0000 | 0.0% | 100.0% |
+| **PHYLA-beta (24M)** | 180 | 0.7784 | 0.8257 | 4.4% | 13.3% |
+| **ESM2-650M** | 180 | 0.7757 | 0.8378 | 5.6% | 13.9% |
+
+#### Per-method coverage
+
+| Method | Families evaluated | Skipped | Skip reasons |
+|--------|:------------------:|:-------:|-------------|
+| Hamming / SeqID / Random | 183 | 120 | MAFFT failure (84), <4 seqs (21), normRF fail (15), prune fail (0) |
+| PHYLA-beta | 255 | 48 | CUDA OOM on RTX 2080 Ti (3 large fams), normRF fail (~18), <4 seqs (~27) |
+| ESM2-650M | 261 | 42 | normRF fail (~15), <4 seqs (~27) |
+| **Intersection (all 3)** | **180** | — | — |
+
+#### Result analysis
+
+**Baseline (Hamming/SeqID) outperforms deep learning methods by a large margin:**
+- Avg normRF: 0.54 (baseline) vs 0.78 (PHYLA/ESM2) — baseline is ~45% closer to reference
+- Perfect matches: 8.9% (Hamming) vs 4.4–5.6% (pLMs)
+- The gap is consistent across all statistical measures
+
+**Why baselines win:** Hamming/SeqID operate on MAFFT-aligned sequences, which explicitly model positional homology through multiple sequence alignment. PHYLA and ESM2 work directly on unaligned raw sequences — their embeddings capture general protein features but lack the explicit evolutionary signal that MSA provides for phylogenetic inference.
+
+**PHYLA vs ESM2: no meaningful difference:**
+- Avg normRF: 0.7784 (PHYLA) vs 0.7757 (ESM2), Δ = 0.003
+- PHYLA's explicit phylogenetic training on TreeFam provides no detectable advantage over ESM2's general-purpose pretraining on virus RdRp sequences
+- This mirrors findings from the VOGDB benchmark
+
+**Comparison with VOGDB benchmark:**
+
+| Benchmark | Families | Hamming avg | PHYLA avg | ESM2 avg |
+|-----------|:--------:|:-----------:|:---------:|:--------:|
+| VOGDB+FastTree | 14,940 | 0.264 | 0.472 | 0.532 |
+| VOGDB+IQ-TREE | 738 | 0.295 | 0.519 | 0.575 |
+| TreeBase (8 experts) | 8 | 0.390 | 0.665 | 0.649 |
+| **Literature RdRp (this)** | **180** | **0.538** | **0.778** | **0.776** |
+
+The literature RdRp benchmark shows systematically higher normRF values across all methods compared to VOGDB benchmarks. This likely reflects:
+1. **Larger, more diverse trees**: Mean 170 leaves/tree (vs ~26 for VOGDB), covering broader taxonomic depth
+2. **Expert-curated topology**: These are published phylogenetic trees from peer-reviewed literature, not algorithmic reconstructions — they may contain biological signal that pure sequence-based methods cannot fully recover
+3. **RdRp-specific complexity**: As an RNA virus polymerase with high mutation rates, RdRp presents a harder phylogenetic signal than typical VOGDB protein families
+
+### Limitations
+
+| # | Issue | Impact | Possible mitigation |
+|---|-------|:------:|---------------------|
+| 1 | **MAFFT bottleneck**: 84/303 families fail MSA (mostly >50 seqs). Limits baseline coverage to 183/282 eligible families | High | Use `--parttree` for all large sets; increase memory; try FFT-NS-2 mode |
+| 2 | **GPU memory constraint**: RTX 2080 Ti (10GB) causes OOM on 3 large PHYLA families (Nodamuvirales_35: 431 seqs, Picornavirales_169: 105 seqs, Yangshan_1: 265 seqs) | Medium | Use A100 (80GB) or batch inference with gradient checkpointing |
+| 3 | **Leaf name mismatch residual**: 15 families still show normRF failed after rename fix — occurs when fuzzy matching falls back to all-dataset-sequence mode (name_map=None) | Low | Extend fuzzy matcher with edit-distance tolerance; pre-build full name mapping table |
+| 4 | **No ground truth validation**: Expert trees are "reference" but may themselves contain errors or reflect specific methodological choices of the original authors | Inherent | Cross-validate with independent markers or co-phylogeny analysis |
+| 5 | **Single gene (RdRp)**: All 303 trees are RdRp-based; results may not generalize to other viral proteins | Medium | Expand to other viral gene benchmarks (capsid, helicase, protease) |
+| 6 | **Evaluation on intersection only**: Reporting on 180 families discards 123 families that succeed with at least one method | Low | Report both intersection (fair comparison) and union (maximum coverage) results |
+
+### Improvement Directions
+
+**Short-term (immediate):**
+
+1. **Resolve remaining MAFFT failures (84 families):** Implement progressive alignment strategy — for families >300 seqs, first cluster at 80% identity, align clusters separately, then merge. This avoids the O(n²) memory blowup while preserving alignment quality.
+
+2. **GPU upgrade for PHYLA:** Resubmit PHYLA job on A100 (80GB) instead of RTX 2080 Ti (10GB). Expected recovery: +3 families (currently OOM).
+
+3. **Extended name matching:** For the 15 normRF-failed families, implement Levenshtein-distance-based fuzzy matching as a final fallback layer beyond the current 4-strategy approach.
+
+**Medium-term:**
+
+4. **Union-set reporting:** Produce two result tables — one on the 180-family intersection (for fair cross-method comparison), one on each method's maximum coverage (183 baseline, 255 PHYLA, 261 ESM2). This gives both fair comparison and maximum utility.
+
+5. **Stratified analysis by tree size:** Break down normRF into size bins (small: ≤20 leaves, medium: 21–100, large: 101–500, very large: 500+) to understand how each method scales with tree complexity.
+
+6. **Add IQ-TREE baseline:** Run IQ-TREE (ModelFinder + LG+G4) on the same sequences as a gold-standard ML baseline. This separates "MSA+NJ is good" from "any proper phylogenetic method beats pLMs."
+
+**Long-term:**
+
+7. **Multi-gene benchmark:** Integrate GVDB giant virus trees (5 families), RdRp-scan master tree (1 family), and Orthototiviridae tree (1 family) to expand beyond RdRp-only evaluation.
+
+8. **Fine-tuning experiment:** Fine-tune PHYLA-beta on a subset of virus RdRp trees, then evaluate on held-out families. This directly tests whether domain adaptation can close the gap between pLM performance and MSA-based methods.
+
+### Output Files
+
+```
+eval_preds/literature/
+├── literature_baselines.csv          # Hamming/SeqID/Random results (183 families)
+├── literature_phyla.csv              # PHYLA-beta results (255 families)
+├── literature_esm2.csv               # ESM2-650M results (261 families)
+└── baselines_diagnostics.csv         # Per-family diagnostic (stage/reason for skip)
+```
+
+### Citation
+
+```bibtex
+@article{brown2025rdrp,
+  title={Uncovering hundreds of exogenous and endogenous RNA viral RdRp 
+         sequences amongst uncharacterized sequences in public protein databases},
+  author={Brown, K. and Firth, A.E.},
+  journal={Virus Evolution},
+  year={2025},
+  doi={10.1093/ve/veaf074},
+  pmid={41143103}
+}
+```
